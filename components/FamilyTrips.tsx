@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Event, TripRsvp, PERSON_COLORS, PERSON_LABELS, FAMILY_KEYS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
@@ -43,6 +43,10 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
   const [loading, setLoading]     = useState(false)
   const [rsvpLoading, setRsvpLoading] = useState<string | null>(null)
 
+  const [editingTrip, setEditingTrip]       = useState<Event | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
+  const formRef = useRef<HTMLDivElement>(null)
+
   const today = new Date().toISOString().slice(0, 10)
   const trips = events
     .filter(e => e.person === 'family')
@@ -51,21 +55,55 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
   const upcoming = trips.filter(e => e.end_date >= today)
   const past     = trips.filter(e => e.end_date < today).reverse()
 
+  const openEdit = (trip: Event) => {
+    setEditingTrip(trip)
+    setName(trip.title)
+    setTripType(trip.trip_type ?? 'family_trip')
+    setStartDate(trip.start_date)
+    setEndDate(trip.end_date)
+    setLocation(trip.location ?? '')
+    setShowForm(true)
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  const resetForm = () => {
+    setEditingTrip(null)
+    setName('')
+    setTripType('family_trip')
+    setStartDate('')
+    setEndDate('')
+    setLocation('')
+    setShowForm(false)
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() || !startDate || !endDate) return
     setLoading(true)
-    await supabase.from('events').insert({
-      title:     name.trim(),
-      person:    'family',
+
+    const payload = {
+      title:      name.trim(),
+      person:     'family',
       start_date: startDate,
       end_date:   endDate,
       location:   location.trim() || null,
       trip_type:  tripType,
-    })
+    }
+
+    if (editingTrip) {
+      await supabase.from('events').update(payload).eq('id', editingTrip.id)
+    } else {
+      await supabase.from('events').insert(payload)
+    }
+
     setLoading(false)
-    setShowForm(false)
-    setName(''); setStartDate(''); setEndDate(''); setLocation(''); setTripType('family_trip')
+    resetForm()
+    onRefresh()
+  }
+
+  const handleDelete = async (id: string) => {
+    await supabase.from('events').delete().eq('id', id)
+    setConfirmingDelete(null)
     onRefresh()
   }
 
@@ -80,17 +118,20 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
   }
 
   const TripCard = ({ trip, dim }: { trip: Event; dim?: boolean }) => {
-    const isActive  = trip.start_date <= today && trip.end_date >= today
-    const myRsvp    = tripRsvps.find(r => r.trip_id === trip.id && r.person === currentUser)
-    const confirmed = tripRsvps.filter(r => r.trip_id === trip.id && r.response === 'yes').length
-    const maybe     = tripRsvps.filter(r => r.trip_id === trip.id && r.response === 'maybe').length
+    const isActive    = trip.start_date <= today && trip.end_date >= today
+    const myRsvp      = tripRsvps.find(r => r.trip_id === trip.id && r.person === currentUser)
+    const confirmed   = tripRsvps.filter(r => r.trip_id === trip.id && r.response === 'yes').length
+    const maybe       = tripRsvps.filter(r => r.trip_id === trip.id && r.response === 'maybe').length
+    const isEditing   = editingTrip?.id === trip.id
+    const isConfirming = confirmingDelete === trip.id
 
     return (
       <div
         className={[
           'bg-white border rounded-2xl p-4 shadow-sm transition-opacity',
-          isActive ? 'border-blue-200' : 'border-stone-100',
-          dim ? 'opacity-50' : '',
+          isActive   ? 'border-blue-200' : 'border-stone-100',
+          isEditing  ? 'ring-2 ring-stone-400' : '',
+          dim        ? 'opacity-50' : '',
         ].join(' ')}
       >
         <div className="flex items-start justify-between gap-3">
@@ -112,11 +153,48 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
               )}
             </div>
           </div>
-          {isActive && (
-            <span className="text-[10px] font-semibold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full flex-shrink-0">
-              Now
-            </span>
-          )}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {isActive && (
+              <span className="text-[10px] font-semibold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">
+                Now
+              </span>
+            )}
+            {/* Edit / Delete buttons */}
+            {!isConfirming && (
+              <button
+                onClick={() => isEditing ? resetForm() : openEdit(trip)}
+                className="text-[11px] text-stone-400 hover:text-stone-600 border border-stone-200 rounded-lg px-2 py-0.5 transition-colors"
+              >
+                {isEditing ? 'Cancel' : 'Edit'}
+              </button>
+            )}
+            {!isEditing && (
+              isConfirming ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-stone-500">Delete?</span>
+                  <button
+                    onClick={() => handleDelete(trip.id)}
+                    className="text-[11px] text-red-600 border border-red-200 rounded-lg px-2 py-0.5 hover:bg-red-50 transition-colors"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    onClick={() => setConfirmingDelete(null)}
+                    className="text-[11px] text-stone-500 border border-stone-200 rounded-lg px-2 py-0.5 hover:bg-stone-50 transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmingDelete(trip.id)}
+                  className="text-[11px] text-stone-300 hover:text-red-500 border border-stone-200 rounded-lg px-2 py-0.5 transition-colors"
+                >
+                  Delete
+                </button>
+              )
+            )}
+          </div>
         </div>
 
         {/* RSVP section */}
@@ -196,7 +274,7 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
           <p className="text-sm text-stone-400 mt-0.5">Equestrian events & family travel</p>
         </div>
         <button
-          onClick={() => setShowForm(v => !v)}
+          onClick={() => { if (showForm && !editingTrip) { setShowForm(false) } else { resetForm(); setShowForm(true) } }}
           className="px-3 py-1.5 bg-stone-800 text-white text-sm rounded-xl hover:bg-stone-700 active:bg-stone-900 transition-colors font-medium"
         >
           + Add trip
@@ -204,8 +282,10 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
       </div>
 
       {showForm && (
-        <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
-          <h3 className="text-sm font-semibold text-stone-700 mb-3">New trip</h3>
+        <div ref={formRef} className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
+          <h3 className="text-sm font-semibold text-stone-700 mb-3">
+            {editingTrip ? 'Edit trip' : 'New trip'}
+          </h3>
           <form onSubmit={handleSubmit} className="space-y-3">
             <input
               type="text"
@@ -255,7 +335,7 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setShowForm(false)}
+                onClick={resetForm}
                 className="flex-1 py-2.5 border border-stone-200 rounded-xl text-sm text-stone-600 hover:bg-white transition-colors"
               >
                 Cancel
@@ -265,7 +345,7 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
                 disabled={loading}
                 className="flex-1 py-2.5 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors disabled:opacity-50"
               >
-                {loading ? 'Saving…' : 'Add trip'}
+                {loading ? 'Saving…' : editingTrip ? 'Save changes' : 'Add trip'}
               </button>
             </div>
           </form>

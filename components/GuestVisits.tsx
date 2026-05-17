@@ -1,7 +1,7 @@
 'use client'
 
-import { useState } from 'react'
-import { Guest, AIX_ROOMS, PERSON_LABELS } from '@/lib/types'
+import { useState, useRef } from 'react'
+import { Guest, AIX_ROOMS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
 interface GuestVisitsProps {
@@ -28,12 +28,41 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
   const [loading, setLoading]         = useState(false)
   const [saveError, setSaveError]     = useState<string | null>(null)
 
+  const [editingGuest, setEditingGuest]       = useState<Guest | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
+  const formRef = useRef<HTMLDivElement>(null)
+
   const today = new Date().toISOString().slice(0, 10)
 
-  const sorted = [...guests].sort((a, b) => a.arrival_date.localeCompare(b.arrival_date))
+  const sorted   = [...guests].sort((a, b) => a.arrival_date.localeCompare(b.arrival_date))
   const active   = sorted.filter(g => g.arrival_date <= today && g.departure_date >= today)
   const upcoming = sorted.filter(g => g.arrival_date > today)
   const past     = sorted.filter(g => g.departure_date < today).reverse()
+
+  const openEdit = (guest: Guest) => {
+    setEditingGuest(guest)
+    setGuestName(guest.guest_name)
+    setHouse(guest.house)
+    setArrivalDate(guest.arrival_date)
+    setDepartureDate(guest.departure_date)
+    setInvitedBy(guest.invited_by ?? '')
+    setAllocatedRoom(guest.allocated_room ?? '')
+    setSaveError(null)
+    setShowForm(true)
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  const resetForm = () => {
+    setEditingGuest(null)
+    setGuestName('')
+    setHouse('aix')
+    setArrivalDate('')
+    setDepartureDate('')
+    setInvitedBy('')
+    setAllocatedRoom('')
+    setSaveError(null)
+    setShowForm(false)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -41,9 +70,6 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
     setSaveError(null)
     setLoading(true)
 
-    // Build payload — only include allocated_room when it has a value,
-    // so a missing column (schema_updates_v3.sql not yet run) doesn't
-    // kill the whole insert.
     const payload: Record<string, unknown> = {
       guest_name:     guestName.trim(),
       house,
@@ -53,50 +79,104 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
     }
     if (house === 'aix' && allocatedRoom) {
       payload.allocated_room = allocatedRoom
+    } else {
+      payload.allocated_room = null
     }
 
-    const { error } = await supabase.from('guests').insert(payload)
+    let error
+    if (editingGuest) {
+      ;({ error } = await supabase.from('guests').update(payload).eq('id', editingGuest.id))
+    } else {
+      ;({ error } = await supabase.from('guests').insert(payload))
+    }
     setLoading(false)
 
     if (error) {
-      console.error('Guest insert failed:', error)
+      console.error('Guest save failed:', error)
       setSaveError(error.message)
-      return   // keep form open so user can see the error
+      return
     }
 
-    setShowForm(false)
-    setGuestName('')
-    setArrivalDate('')
-    setDepartureDate('')
-    setInvitedBy('')
-    setAllocatedRoom('')
+    resetForm()
     onRefresh()
   }
 
-  const GuestCard = ({ guest, badge }: { guest: Guest; badge?: string }) => (
-    <div className="bg-white border border-stone-100 rounded-2xl p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <div className="w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 bg-stone-400" />
-          <div>
-            <p className="text-sm font-semibold text-stone-800">{guest.guest_name}</p>
-            {guest.invited_by && (
-              <p className="text-xs text-stone-400 mt-0.5">via {guest.invited_by}</p>
+  const handleDelete = async (id: string) => {
+    await supabase.from('guests').delete().eq('id', id)
+    setConfirmingDelete(null)
+    onRefresh()
+  }
+
+  const GuestCard = ({ guest, badge }: { guest: Guest; badge?: string }) => {
+    const isEditing    = editingGuest?.id === guest.id
+    const isConfirming = confirmingDelete === guest.id
+
+    return (
+      <div
+        className={[
+          'bg-white border border-stone-100 rounded-2xl p-4 shadow-sm',
+          isEditing ? 'ring-2 ring-stone-400' : '',
+        ].join(' ')}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
+            <div className="w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 bg-stone-400" />
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-stone-800">{guest.guest_name}</p>
+              {guest.invited_by && (
+                <p className="text-xs text-stone-400 mt-0.5">via {guest.invited_by}</p>
+              )}
+              <p className="text-xs text-stone-400 mt-0.5">
+                {guest.house === 'aix' ? '🏠 Aix-en-Provence' : '🏔️ Geneva'}
+              </p>
+              <p className="text-xs text-stone-400 mt-0.5">
+                {formatDate(guest.arrival_date)} – {formatDate(guest.departure_date)}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            {badge && (
+              <span className="text-[10px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full">{badge}</span>
             )}
-            <p className="text-xs text-stone-400 mt-0.5">
-              {guest.house === 'aix' ? '🏠 Aix-en-Provence' : '🏔️ Geneva'}
-            </p>
-            <p className="text-xs text-stone-400 mt-0.5">
-              {formatDate(guest.arrival_date)} – {formatDate(guest.departure_date)}
-            </p>
+            {!isConfirming && (
+              <button
+                onClick={() => isEditing ? resetForm() : openEdit(guest)}
+                className="text-[11px] text-stone-400 hover:text-stone-600 border border-stone-200 rounded-lg px-2 py-0.5 transition-colors"
+              >
+                {isEditing ? 'Cancel' : 'Edit'}
+              </button>
+            )}
+            {!isEditing && (
+              isConfirming ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-[11px] text-stone-500">Delete?</span>
+                  <button
+                    onClick={() => handleDelete(guest.id)}
+                    className="text-[11px] text-red-600 border border-red-200 rounded-lg px-2 py-0.5 hover:bg-red-50 transition-colors"
+                  >
+                    Yes
+                  </button>
+                  <button
+                    onClick={() => setConfirmingDelete(null)}
+                    className="text-[11px] text-stone-500 border border-stone-200 rounded-lg px-2 py-0.5 hover:bg-stone-50 transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmingDelete(guest.id)}
+                  className="text-[11px] text-stone-300 hover:text-red-500 border border-stone-200 rounded-lg px-2 py-0.5 transition-colors"
+                >
+                  Delete
+                </button>
+              )
+            )}
           </div>
         </div>
-        {badge && (
-          <span className="text-[10px] font-semibold bg-stone-100 text-stone-600 px-2 py-0.5 rounded-full flex-shrink-0">{badge}</span>
-        )}
       </div>
-    </div>
-  )
+    )
+  }
 
   return (
     <div className="space-y-6">
@@ -105,14 +185,19 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
           <h2 className="font-serif text-xl font-semibold text-stone-800">Guest Visits</h2>
           <p className="text-sm text-stone-400 mt-0.5">Visitors to Aix & Geneva</p>
         </div>
-        <button onClick={() => setShowForm(v => !v)} className="px-3 py-1.5 bg-stone-800 text-white text-sm rounded-xl hover:bg-stone-700 active:bg-stone-900 transition-colors font-medium">
+        <button
+          onClick={() => { if (showForm && !editingGuest) { setShowForm(false) } else { resetForm(); setShowForm(true) } }}
+          className="px-3 py-1.5 bg-stone-800 text-white text-sm rounded-xl hover:bg-stone-700 active:bg-stone-900 transition-colors font-medium"
+        >
           + Add guest
         </button>
       </div>
 
       {showForm && (
-        <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
-          <h3 className="text-sm font-semibold text-stone-700 mb-3">New guest visit</h3>
+        <div ref={formRef} className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
+          <h3 className="text-sm font-semibold text-stone-700 mb-3">
+            {editingGuest ? 'Edit guest visit' : 'New guest visit'}
+          </h3>
           <form onSubmit={handleSubmit} className="space-y-3">
             <input
               type="text"
@@ -192,8 +277,10 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
             )}
 
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setShowForm(false); setSaveError(null) }} className="flex-1 py-2.5 border border-stone-200 rounded-xl text-sm text-stone-600 hover:bg-white transition-colors">Cancel</button>
-              <button type="submit" disabled={loading} className="flex-1 py-2.5 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors disabled:opacity-50">{loading ? 'Saving…' : 'Add guest'}</button>
+              <button type="button" onClick={resetForm} className="flex-1 py-2.5 border border-stone-200 rounded-xl text-sm text-stone-600 hover:bg-white transition-colors">Cancel</button>
+              <button type="submit" disabled={loading} className="flex-1 py-2.5 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors disabled:opacity-50">
+                {loading ? 'Saving…' : editingGuest ? 'Save changes' : 'Add guest'}
+              </button>
             </div>
           </form>
         </div>
