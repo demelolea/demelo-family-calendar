@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Stay, Location, PERSON_COLORS, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
@@ -110,19 +110,23 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
   const past     = myStays.filter(s => s.end_date < today).reverse()
 
   // Form state
-  const [showForm, setShowForm] = useState(false)
-  const [location, setLocation] = useState('')
-  const [startDate, setStartDate] = useState('')
-  const [endDate, setEndDate]     = useState('')
-  const [arrType, setArrType]       = useState('')
+  const formRef = useRef<HTMLDivElement>(null)
+  const [showForm,     setShowForm]     = useState(false)
+  const [editingStay,  setEditingStay]  = useState<Stay | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
+
+  const [location,   setLocation]   = useState('')
+  const [startDate,  setStartDate]  = useState('')
+  const [endDate,    setEndDate]    = useState('')
+  const [status,     setStatus]     = useState<'confirmed' | 'tentative'>('confirmed')
+  const [arrType,    setArrType]    = useState('')
   const [arrStation, setArrStation] = useState('')
-  const [arrTime, setArrTime]       = useState('')
-  const [depType, setDepType]       = useState('')
+  const [arrTime,    setArrTime]    = useState('')
+  const [depType,    setDepType]    = useState('')
   const [depStation, setDepStation] = useState('')
-  const [depTime, setDepTime]       = useState('')
-  const [status, setStatus]     = useState<'confirmed' | 'tentative'>('confirmed')
-  const [loading, setLoading]   = useState(false)
-  const [deleting, setDeleting] = useState<string | null>(null)
+  const [depTime,    setDepTime]    = useState('')
+  const [loading,    setLoading]    = useState(false)
+  const [deleting,   setDeleting]   = useState<string | null>(null)
 
   const resetForm = () => {
     setLocation(''); setStartDate(''); setEndDate('')
@@ -131,26 +135,61 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     setDepType(''); setDepStation(''); setDepTime('')
   }
 
+  const openAdd = () => {
+    setEditingStay(null)
+    resetForm()
+    setShowForm(true)
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  const openEdit = (stay: Stay) => {
+    setEditingStay(stay)
+    setLocation(stay.location)
+    setStartDate(stay.start_date)
+    setEndDate(stay.end_date)
+    setStatus(stay.status ?? 'confirmed')
+    setArrType(stay.arr_transport_type ?? '')
+    setArrStation(stay.arr_station ?? '')
+    setArrTime(stay.arr_time ?? '')
+    setDepType(stay.dep_transport_type ?? '')
+    setDepStation(stay.dep_station ?? '')
+    setDepTime(stay.dep_time ?? '')
+    setShowForm(true)
+    setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50)
+  }
+
+  const cancelForm = () => {
+    setShowForm(false)
+    setEditingStay(null)
+    resetForm()
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!location.trim() || !startDate || !endDate) return
     setLoading(true)
-    await supabase.from('stays').insert({
-      person: currentUser,
-      location: location.trim(),
-      start_date: startDate,
-      end_date: endDate,
+
+    const payload = {
+      location:           location.trim(),
+      start_date:         startDate,
+      end_date:           endDate,
       status,
       arr_transport_type: arrType || null,
-      arr_station: (arrType && arrType !== 'car') ? (arrStation.trim() || null) : null,
-      arr_time:    (arrType && arrType !== 'car') ? (arrTime || null) : null,
+      arr_station:        (arrType && arrType !== 'car') ? (arrStation.trim() || null) : null,
+      arr_time:           (arrType && arrType !== 'car') ? (arrTime || null) : null,
       dep_transport_type: depType || null,
-      dep_station: (depType && depType !== 'car') ? (depStation.trim() || null) : null,
-      dep_time:    (depType && depType !== 'car') ? (depTime || null) : null,
-    })
+      dep_station:        (depType && depType !== 'car') ? (depStation.trim() || null) : null,
+      dep_time:           (depType && depType !== 'car') ? (depTime || null) : null,
+    }
+
+    if (editingStay) {
+      await supabase.from('stays').update(payload).eq('id', editingStay.id)
+    } else {
+      await supabase.from('stays').insert({ person: currentUser, ...payload })
+    }
+
     setLoading(false)
-    setShowForm(false)
-    resetForm()
+    cancelForm()
     onRefresh()
   }
 
@@ -158,19 +197,24 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     setDeleting(id)
     await supabase.from('stays').delete().eq('id', id)
     setDeleting(null)
+    setConfirmingDelete(null)
     onRefresh()
   }
 
   const StayCard = ({ stay, dim }: { stay: Stay; dim?: boolean }) => {
-    const isActive = stay.start_date <= today && stay.end_date >= today
-    const arrSummary = transportSummary(stay.arr_transport_type, stay.arr_station, stay.arr_time)
-    const depSummary = transportSummary(stay.dep_transport_type, stay.dep_station, stay.dep_time)
+    const isActive    = stay.start_date <= today && stay.end_date >= today
+    const arrSummary  = transportSummary(stay.arr_transport_type, stay.arr_station, stay.arr_time)
+    const depSummary  = transportSummary(stay.dep_transport_type, stay.dep_station, stay.dep_time)
+    const isEditing   = editingStay?.id === stay.id
+    const isConfirming = confirmingDelete === stay.id
+
     return (
       <div
         className={[
           'bg-white border rounded-2xl p-4 shadow-sm transition-opacity',
-          isActive ? 'border-amber-200' : 'border-stone-100',
-          dim ? 'opacity-50' : '',
+          isActive   ? 'border-amber-200' : 'border-stone-100',
+          isEditing  ? 'ring-2 ring-stone-300' : '',
+          dim        ? 'opacity-50' : '',
         ].join(' ')}
       >
         <div className="flex items-start justify-between gap-2">
@@ -193,7 +237,9 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+
+          {/* Badges + action buttons */}
+          <div className="flex items-center gap-1.5 flex-shrink-0">
             {stay.status === 'tentative' && (
               <span className="text-[10px] font-semibold bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">
                 Tentative
@@ -204,13 +250,50 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
                 Now
               </span>
             )}
-            <button
-              onClick={() => handleDelete(stay.id)}
-              disabled={deleting === stay.id}
-              className="text-xs text-stone-300 hover:text-red-400 transition-colors px-1.5 py-1"
-            >
-              {deleting === stay.id ? '…' : '✕'}
-            </button>
+
+            {/* Edit button */}
+            {!isConfirming && (
+              <button
+                onClick={() => isEditing ? cancelForm() : openEdit(stay)}
+                className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
+                  isEditing
+                    ? 'border-stone-300 text-stone-500 bg-stone-50'
+                    : 'border-stone-200 text-stone-400 hover:text-stone-600 hover:border-stone-300 bg-white'
+                }`}
+              >
+                {isEditing ? 'Cancel' : 'Edit'}
+              </button>
+            )}
+
+            {/* Delete — two-step confirmation */}
+            {!isEditing && (
+              isConfirming ? (
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-stone-500">Delete?</span>
+                  <button
+                    onClick={() => handleDelete(stay.id)}
+                    disabled={deleting === stay.id}
+                    className="text-[10px] font-semibold text-white bg-red-500 hover:bg-red-600 px-2 py-0.5 rounded-md transition-colors disabled:opacity-50"
+                  >
+                    {deleting === stay.id ? '…' : 'Yes'}
+                  </button>
+                  <button
+                    onClick={() => setConfirmingDelete(null)}
+                    className="text-[10px] font-semibold text-stone-500 border border-stone-200 px-2 py-0.5 rounded-md hover:bg-stone-50 transition-colors"
+                  >
+                    No
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setConfirmingDelete(stay.id)}
+                  className="text-xs text-stone-300 hover:text-red-400 transition-colors px-1.5 py-1"
+                  title="Delete stay"
+                >
+                  ✕
+                </button>
+              )
+            )}
           </div>
         </div>
       </div>
@@ -232,17 +315,19 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
           )}
         </div>
         <button
-          onClick={() => setShowForm(v => !v)}
+          onClick={openAdd}
           className="px-3 py-1.5 bg-stone-800 text-white text-sm rounded-xl hover:bg-stone-700 active:bg-stone-900 transition-colors font-medium"
         >
           + Add stay
         </button>
       </div>
 
-      {/* Add form */}
+      {/* Add / Edit form */}
       {showForm && (
-        <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
-          <h3 className="text-sm font-semibold text-stone-700 mb-3">New stay</h3>
+        <div ref={formRef} className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
+          <h3 className="text-sm font-semibold text-stone-700 mb-3">
+            {editingStay ? 'Edit stay' : 'New stay'}
+          </h3>
           <form onSubmit={handleSubmit} className="space-y-3">
             <input
               type="text"
@@ -323,7 +408,7 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
             <div className="flex gap-2 pt-1">
               <button
                 type="button"
-                onClick={() => { setShowForm(false); resetForm() }}
+                onClick={cancelForm}
                 className="flex-1 py-2.5 border border-stone-200 rounded-xl text-sm text-stone-600 hover:bg-white transition-colors"
               >
                 Cancel
@@ -333,7 +418,7 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
                 disabled={loading}
                 className="flex-1 py-2.5 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors disabled:opacity-50"
               >
-                {loading ? 'Saving…' : 'Save stay'}
+                {loading ? 'Saving…' : editingStay ? 'Save changes' : 'Save stay'}
               </button>
             </div>
           </form>
