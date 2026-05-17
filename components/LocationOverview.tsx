@@ -170,7 +170,7 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
         )
         if (family) { result[person][ds] = family.location!; continue }
 
-        result[person][ds] = locations.find(l => l.person === person)?.current_location ?? '—'
+        result[person][ds] = ''  // blank until explicitly entered
       }
     }
 
@@ -214,7 +214,7 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
         if (st) return abbr(st.location)
         const fam = events.find(e => e.person === 'family' && e.start_date <= ds && e.end_date >= ds && e.location)
         if (fam) return abbr(fam.location!)
-        return abbr(locations.find(l => l.person === person)?.current_location ?? '—')
+        return ''  // blank if not explicitly entered
       })
 
       // Compress into runs
@@ -451,19 +451,22 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
                       )
                     }
 
-                    const loc = grid[person]?.[ds] ?? '—'
-                    const s   = cellStyle(loc)
-                    const bg  = isTdy ? '#FDE68A' : isWknd ? '#FAFAF8' : s.background
+                    const loc     = grid[person]?.[ds] ?? ''
+                    const isEmpty = !loc
+                    const s       = isEmpty ? { background: '#FFFFFF', color: 'transparent' } : cellStyle(loc)
+                    const bg      = isTdy ? '#FDE68A' : isEmpty ? '#FFFFFF' : isWknd ? '#FAFAF8' : s.background
                     return (
                       <div
                         key={i}
                         className="flex-shrink-0 flex items-center justify-center border-r border-stone-50"
                         style={{ width: DAY_W, height: 38, background: bg }}
-                        title={`${PERSON_LABELS[person]} · ${day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${loc}`}
+                        title={isEmpty ? undefined : `${PERSON_LABELS[person]} · ${day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${loc}`}
                       >
-                        <span style={{ color: isTdy ? '#92400E' : s.color, fontSize: 8, fontWeight: 600, letterSpacing: -0.2 }}>
-                          {abbr(loc)}
-                        </span>
+                        {!isEmpty && (
+                          <span style={{ color: isTdy ? '#92400E' : s.color, fontSize: 8, fontWeight: 600, letterSpacing: -0.2 }}>
+                            {abbr(loc)}
+                          </span>
+                        )}
                       </div>
                     )
                   })}
