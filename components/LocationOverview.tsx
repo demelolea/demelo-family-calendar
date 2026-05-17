@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useMemo, useEffect } from 'react'
-import { Event, Location, PhoebeSchedule, Guest, Stay, PERSON_COLORS, PERSON_LABELS, hexToRgba } from '@/lib/types'
+import { useState, useMemo, useEffect, useRef } from 'react'
+import { Event, Location, PhoebeSchedule, Guest, Stay, TripRsvp, PERSON_COLORS, PERSON_LABELS, FAMILY_MEMBERS, hexToRgba } from '@/lib/types'
+import { supabase } from '@/lib/supabase'
 
 interface LocationOverviewProps {
   events: Event[]
@@ -9,27 +10,40 @@ interface LocationOverviewProps {
   phoebeSchedule: PhoebeSchedule[]
   stays: Stay[]
   guests: Guest[]
+  tripRsvps: TripRsvp[]
+  onRefresh: () => void
 }
 
-type GridView = 'fortnight' | 'month' | 'summer'
+type GridView = 'fortnight' | 'month' | 'june' | 'july' | 'august' | 'summer'
 
 const PEOPLE = ['jim', 'isabelle', 'elissa', 'ines', 'lea']
 const DAY_W  = 34
 const NAME_W = 92
 
+const ALL_VIEWS: GridView[] = ['fortnight', 'month', 'june', 'july', 'august', 'summer']
+
 function toDateStr(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+function monthDays(year: number, month: number): Date[] {
+  const last = new Date(year, month + 1, 0).getDate()
+  return Array.from({ length: last }, (_, i) => new Date(year, month, i + 1))
+}
+
 function generateDays(view: GridView, today: Date): Date[] {
+  if (view === 'june')   return monthDays(2026, 5)
+  if (view === 'july')   return monthDays(2026, 6)
+  if (view === 'august') return monthDays(2026, 7)
+
   const days: Date[] = []
 
   if (view === 'summer') {
     const MONTHS = [
-      { month: 4, days: 31 }, // May
-      { month: 5, days: 30 }, // June
-      { month: 6, days: 31 }, // July
-      { month: 7, days: 31 }, // August
+      { month: 4, days: 31 },
+      { month: 5, days: 30 },
+      { month: 6, days: 31 },
+      { month: 7, days: 31 },
     ]
     for (const m of MONTHS) {
       for (let d = 1; d <= m.days; d++) {
@@ -44,7 +58,6 @@ function generateDays(view: GridView, today: Date): Date[] {
       days.push(new Date(year, month, d))
     }
   } else {
-    // fortnight — today + next 13 days
     for (let d = 0; d < 14; d++) {
       const day = new Date(today)
       day.setDate(today.getDate() + d)
@@ -106,12 +119,21 @@ const LEGEND_ITEMS: { label: string; loc: string }[] = [
 ]
 
 const VIEW_OPTIONS: { id: GridView; label: string }[] = [
-  { id: 'fortnight', label: 'Next 2 weeks' },
-  { id: 'month',     label: 'This month'   },
-  { id: 'summer',    label: 'Full summer'  },
+  { id: 'fortnight', label: '2 weeks'    },
+  { id: 'month',     label: 'This month' },
+  { id: 'june',      label: 'June'       },
+  { id: 'july',      label: 'July'       },
+  { id: 'august',    label: 'August'     },
+  { id: 'summer',    label: 'Full summer'},
 ]
 
-export default function LocationOverview({ events, locations, phoebeSchedule, stays, guests }: LocationOverviewProps) {
+function formatDate(d: string) {
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', {
+    day: 'numeric', month: 'short', year: 'numeric',
+  })
+}
+
+export default function LocationOverview({ events, locations, phoebeSchedule, stays, guests, tripRsvps, onRefresh }: LocationOverviewProps) {
   const todayDate = useMemo(() => new Date(), [])
   const todayStr  = toDateStr(todayDate)
 
@@ -121,7 +143,7 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
   // Restore saved view preference
   useEffect(() => {
     const saved = localStorage.getItem('demelo_grid_view') as GridView | null
-    if (saved && ['fortnight', 'month', 'summer'].includes(saved)) {
+    if (saved && ALL_VIEWS.includes(saved)) {
       setGridView(saved)
     }
   }, [])
@@ -131,11 +153,11 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
     localStorage.setItem('demelo_grid_view', v)
   }
 
-  const days         = useMemo(() => generateDays(gridView, todayDate), [gridView, todayDate])
-  const monthGroups  = useMemo(() => computeMonthGroups(days), [days])
-  const totalWidth   = NAME_W + DAY_W * days.length
+  const days        = useMemo(() => generateDays(gridView, todayDate), [gridView, todayDate])
+  const monthGroups = useMemo(() => computeMonthGroups(days), [days])
+  const totalWidth  = NAME_W + DAY_W * days.length
 
-  // Phoebe handover dates: date → "Prev → Next"
+  // Phoebe handover dates
   const handoverMap = useMemo(() => {
     const sorted = [...phoebeSchedule].sort((a, b) => a.start_date.localeCompare(b.start_date))
     const map    = new Map<string, string>()
@@ -147,21 +169,35 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
     return map
   }, [phoebeSchedule])
 
-  // Which person+date cells are displaying a tentative stay
+  // Tentative cells — personal tentative stays + "maybe" RSVPs on family trips
   const tentativeSet = useMemo(() => {
     const set = new Set<string>()
+
     for (const person of PEOPLE) {
       for (const day of days) {
         const ds = toDateStr(day)
-        // Personal events take priority — if one covers this day, it's not a stay
+
+        // Personal event takes priority
         if (events.some(e => e.person === person && e.start_date <= ds && e.end_date >= ds && e.location)) continue
+
+        // Tentative personal stay
         const stay = stays.find(s => s.person === person && s.start_date <= ds && s.end_date >= ds)
-        if (stay?.status === 'tentative') set.add(`${person}:${ds}`)
+        if (stay?.status === 'tentative') { set.add(`${person}:${ds}`); continue }
+
+        // "Maybe" RSVP on family trip — only if no personal stay covers
+        if (!stay) {
+          const familyTrip = events.find(e => e.person === 'family' && e.start_date <= ds && e.end_date >= ds && e.location)
+          if (familyTrip) {
+            const rsvp = tripRsvps.find(r => r.trip_id === familyTrip.id && r.person === person)
+            if (rsvp?.response === 'maybe') set.add(`${person}:${ds}`)
+          }
+        }
       }
     }
     return set
-  }, [stays, events, days])
+  }, [stays, events, days, tripRsvps])
 
+  // Location grid — respects individual RSVPs for family trips
   const grid = useMemo(() => {
     const result: Record<string, Record<string, string>> = {}
 
@@ -183,23 +219,100 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
         const family = events.find(e =>
           e.person === 'family' && e.start_date <= ds && e.end_date >= ds && e.location,
         )
-        if (family) { result[person][ds] = family.location!; continue }
+        if (family) {
+          const rsvp = tripRsvps.find(r => r.trip_id === family.id && r.person === person)
+          if (rsvp?.response === 'no') {
+            result[person][ds] = ''   // declined — leave blank
+          } else {
+            result[person][ds] = family.location!  // yes / maybe / no rsvp → show location
+          }
+          continue
+        }
 
-        result[person][ds] = ''  // blank until explicitly entered
+        result[person][ds] = ''
       }
     }
 
     result['phoebe'] = {}
     for (const day of days) {
-      const ds   = toDateStr(day)
+      const ds    = toDateStr(day)
       const sched = phoebeSchedule.find(p => p.start_date <= ds && p.end_date >= ds)
       result['phoebe'][ds] = sched?.with_whom ?? ''
     }
 
     return result
-  }, [events, locations, phoebeSchedule, stays, days])
+  }, [events, phoebeSchedule, stays, days, tripRsvps])
 
-  // WhatsApp / clipboard week share
+  // ── Manage stays state ──────────────────────────────────────────────────
+  const [showManage,   setShowManage]   = useState(false)
+  const [managePerson, setManagePerson] = useState('jim')
+  const [showForm,     setShowForm]     = useState(false)
+  const [editingStay,  setEditingStay]  = useState<Stay | null>(null)
+  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
+  const [mloc,     setMloc]     = useState('')
+  const [mstart,   setMstart]   = useState('')
+  const [mend,     setMend]     = useState('')
+  const [mstatus,  setMstatus]  = useState<'confirmed' | 'tentative'>('confirmed')
+  const [mloading, setMloading] = useState(false)
+  const manageFormRef = useRef<HTMLDivElement>(null)
+
+  const personStays = useMemo(() =>
+    stays
+      .filter(s => s.person === managePerson)
+      .sort((a, b) => a.start_date.localeCompare(b.start_date)),
+    [stays, managePerson],
+  )
+
+  const openAdd = () => {
+    setEditingStay(null)
+    setMloc(''); setMstart(''); setMend(''); setMstatus('confirmed')
+    setShowForm(true)
+    setTimeout(() => manageFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
+  }
+
+  const openEdit = (stay: Stay) => {
+    setEditingStay(stay)
+    setMloc(stay.location)
+    setMstart(stay.start_date)
+    setMend(stay.end_date)
+    setMstatus(stay.status ?? 'confirmed')
+    setShowForm(true)
+    setTimeout(() => manageFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 50)
+  }
+
+  const cancelForm = () => {
+    setShowForm(false)
+    setEditingStay(null)
+    setMloc(''); setMstart(''); setMend(''); setMstatus('confirmed')
+  }
+
+  const handleManageSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!mloc.trim() || !mstart || !mend) return
+    setMloading(true)
+    const payload = {
+      location:   mloc.trim(),
+      start_date: mstart,
+      end_date:   mend,
+      status:     mstatus,
+    }
+    if (editingStay) {
+      await supabase.from('stays').update(payload).eq('id', editingStay.id)
+    } else {
+      await supabase.from('stays').insert({ person: managePerson, ...payload })
+    }
+    setMloading(false)
+    cancelForm()
+    onRefresh()
+  }
+
+  const handleManageDelete = async (id: string) => {
+    await supabase.from('stays').delete().eq('id', id)
+    setConfirmingDelete(null)
+    onRefresh()
+  }
+
+  // ── WhatsApp / clipboard week share ────────────────────────────────────
   const shareWeek = () => {
     const today = new Date(todayStr + 'T12:00:00')
     const dow   = today.getDay()
@@ -228,11 +341,13 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
         const st = stays.find(s => s.person === person && s.start_date <= ds && s.end_date >= ds)
         if (st) return abbr(st.location)
         const fam = events.find(e => e.person === 'family' && e.start_date <= ds && e.end_date >= ds && e.location)
-        if (fam) return abbr(fam.location!)
-        return ''  // blank if not explicitly entered
+        if (fam) {
+          const rsvp = tripRsvps.find(r => r.trip_id === fam.id && r.person === person)
+          if (rsvp?.response !== 'no') return abbr(fam.location!)
+        }
+        return ''
       })
 
-      // Compress into runs
       const runs: { loc: string; start: number; end: number }[] = []
       locs.forEach((loc, i) => {
         if (runs.length === 0 || runs[runs.length - 1].loc !== loc) {
@@ -255,7 +370,6 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
       lines.push(`📍 ${PERSON_LABELS[person]}: ${summary}`)
     }
 
-    // Phoebe
     const phoebeDays = weekDays
       .map(wd => phoebeSchedule.find(p => p.start_date <= toDateStr(wd) && p.end_date >= toDateStr(wd))?.with_whom ?? '')
       .filter(Boolean)
@@ -264,9 +378,8 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
       lines.push(`🐾 Phoebe: with ${uniquePhoebe.join(' → ')}`)
     }
 
-    // Guests this week
-    const wStart = toDateStr(weekDays[0])
-    const wEnd   = toDateStr(weekDays[6])
+    const wStart  = toDateStr(weekDays[0])
+    const wEnd    = toDateStr(weekDays[6])
     const wGuests = guests.filter(g => g.arrival_date <= wEnd && g.departure_date >= wStart)
     if (wGuests.length > 0) {
       lines.push(`🏠 Guests: ${wGuests.map(g => g.guest_name).join(', ')}`)
@@ -302,15 +415,15 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
           </p>
         </div>
 
-        {/* View toggle + WhatsApp share */}
+        {/* View toggle + share */}
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-xl border border-stone-200 overflow-hidden bg-white">
+          <div className="flex flex-wrap rounded-xl border border-stone-200 overflow-hidden bg-white">
             {VIEW_OPTIONS.map(opt => (
               <button
                 key={opt.id}
                 onClick={() => changeView(opt.id)}
                 className={[
-                  'px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap',
+                  'px-2.5 py-1.5 text-xs font-medium transition-colors whitespace-nowrap border-r border-stone-100 last:border-r-0',
                   gridView === opt.id
                     ? 'bg-stone-800 text-white'
                     : 'text-stone-500 hover:bg-stone-50',
@@ -331,12 +444,7 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
             ].join(' ')}
             title="Share this week's summary via WhatsApp (mobile) or copy (desktop)"
           >
-            {copied ? '✓ Copied!' : (
-              <>
-                <span>📲</span>
-                <span>Share week</span>
-              </>
-            )}
+            {copied ? '✓ Copied!' : <><span>📲</span><span>Share week</span></>}
           </button>
         </div>
       </div>
@@ -357,7 +465,6 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
           <span className="text-xs text-stone-500">Phoebe — colour = custodian</span>
         </div>
 
-        {/* Confirmed / Tentative indicators */}
         <div className="w-full border-t border-stone-100 mt-0.5 pt-2 flex flex-wrap gap-x-5 gap-y-1.5">
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-3 rounded-sm bg-stone-300" />
@@ -371,7 +478,11 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
                 backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.6) 2px, rgba(255,255,255,0.6) 4px)',
               }}
             />
-            <span className="text-xs text-stone-500">Tentative stay</span>
+            <span className="text-xs text-stone-500">Tentative / maybe</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 rounded-sm bg-white border border-stone-200" />
+            <span className="text-xs text-stone-500">Declined trip / not entered</span>
           </div>
         </div>
       </div>
@@ -381,7 +492,7 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
         <div className="overflow-x-auto">
           <div style={{ minWidth: totalWidth }}>
 
-            {/* Month headers — dynamic */}
+            {/* Month headers */}
             <div className="flex border-b border-stone-100">
               <div className="flex-shrink-0 sticky left-0 z-20 bg-stone-50 border-r border-stone-100" style={{ width: NAME_W }} />
               {monthGroups.map((mg, i) => (
@@ -421,7 +532,6 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
               const isLast   = rowIdx === allPeople.length - 1
               return (
                 <div key={person} className={`flex ${isLast ? '' : 'border-b border-stone-100'}`}>
-                  {/* Sticky name cell */}
                   <div
                     className="flex-shrink-0 sticky left-0 z-10 bg-white border-r border-stone-100 flex items-center gap-2 px-3"
                     style={{ width: NAME_W, height: 38 }}
@@ -435,17 +545,16 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
                     </span>
                   </div>
 
-                  {/* Day cells */}
                   {days.map((day, i) => {
                     const ds     = toDateStr(day)
                     const isWknd = day.getDay() === 0 || day.getDay() === 6
                     const isTdy  = ds === todayStr
 
                     if (isPhoebe) {
-                      const custodian  = grid['phoebe']?.[ds] ?? ''
-                      const personKey  = custodian.toLowerCase()
+                      const custodian   = grid['phoebe']?.[ds] ?? ''
+                      const personKey   = custodian.toLowerCase()
                       const personColor = PERSON_COLORS[personKey] ?? PERSON_COLORS.phoebe
-                      const isHandover = handoverMap.has(ds)
+                      const isHandover  = handoverMap.has(ds)
                       const bg = custodian
                         ? hexToRgba(personColor, isTdy ? 0.45 : 0.22)
                         : isTdy ? '#FDE68A' : isWknd ? '#FAFAF8' : ''
@@ -455,10 +564,8 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
                           key={i}
                           className="flex-shrink-0 flex items-center justify-center border-r border-stone-50 relative"
                           style={{
-                            width: DAY_W,
-                            height: 38,
+                            width: DAY_W, height: 38,
                             background: bg,
-                            // Amber left border on handover days
                             borderLeft: isHandover ? '2px solid #F59E0B' : undefined,
                           }}
                           title={
@@ -473,35 +580,25 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
                             </span>
                           )}
                           {isHandover && (
-                            <span
-                              className="absolute top-0.5 right-0.5"
-                              style={{ fontSize: 6, color: '#D97706', fontWeight: 700 }}
-                            >
-                              ↔
-                            </span>
+                            <span className="absolute top-0.5 right-0.5" style={{ fontSize: 6, color: '#D97706', fontWeight: 700 }}>↔</span>
                           )}
                         </div>
                       )
                     }
 
-                    const loc          = grid[person]?.[ds] ?? ''
-                    const isEmpty      = !loc
-                    const isTentative  = !isEmpty && tentativeSet.has(`${person}:${ds}`)
-                    const s            = isEmpty ? { background: '#FFFFFF', color: 'transparent' } : cellStyle(loc)
-                    const bg           = isTdy ? '#FDE68A' : isEmpty ? '#FFFFFF' : isWknd ? '#FAFAF8' : s.background
-                    const stripeImage  = isTentative
+                    const loc         = grid[person]?.[ds] ?? ''
+                    const isEmpty     = !loc
+                    const isTentative = !isEmpty && tentativeSet.has(`${person}:${ds}`)
+                    const s           = isEmpty ? { background: '#FFFFFF', color: 'transparent' } : cellStyle(loc)
+                    const bg          = isTdy ? '#FDE68A' : isEmpty ? '#FFFFFF' : isWknd ? '#FAFAF8' : s.background
+                    const stripeImage = isTentative
                       ? 'repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.55) 4px, rgba(255,255,255,0.55) 8px)'
                       : undefined
                     return (
                       <div
                         key={i}
                         className="flex-shrink-0 flex items-center justify-center border-r border-stone-50"
-                        style={{
-                          width: DAY_W,
-                          height: 38,
-                          background: bg,
-                          backgroundImage: stripeImage,
-                        }}
+                        style={{ width: DAY_W, height: 38, background: bg, backgroundImage: stripeImage }}
                         title={isEmpty ? undefined : `${PERSON_LABELS[person]} · ${day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${loc}${isTentative ? ' (tentative)' : ''}`}
                       >
                         {!isEmpty && (
@@ -519,9 +616,181 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
         </div>
       </div>
 
-      <p className="text-xs text-stone-400">
-        Tip: add events with a location to any person's calendar to populate their row automatically.
-      </p>
+      {/* ── Manage stays ─────────────────────────────────────────────────── */}
+      <div className="border border-stone-200 rounded-2xl overflow-hidden">
+        <button
+          onClick={() => { setShowManage(v => !v); if (showManage) cancelForm() }}
+          className="w-full flex items-center justify-between px-4 py-3 bg-stone-50 hover:bg-stone-100 transition-colors text-left"
+        >
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-stone-700">✏️ Edit stays</span>
+            <span className="text-xs text-stone-400 hidden sm:inline">Add or update anyone's location</span>
+          </div>
+          <span className="text-stone-400 text-sm">{showManage ? '↑' : '↓'}</span>
+        </button>
+
+        {showManage && (
+          <div className="p-4 space-y-4 bg-white">
+            {/* Person selector */}
+            <div className="flex flex-wrap gap-2">
+              {FAMILY_MEMBERS.map(m => (
+                <button
+                  key={m.value}
+                  onClick={() => { setManagePerson(m.value); cancelForm() }}
+                  className={[
+                    'px-3 py-1.5 rounded-xl text-sm font-medium border transition-colors',
+                    managePerson === m.value
+                      ? 'text-white border-transparent'
+                      : 'border-stone-200 text-stone-600 bg-white hover:bg-stone-50',
+                  ].join(' ')}
+                  style={managePerson === m.value ? { backgroundColor: PERSON_COLORS[m.value] } : undefined}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Existing stays for this person */}
+            {personStays.length > 0 && (
+              <div className="space-y-2">
+                {personStays.map(stay => {
+                  const isPast       = stay.end_date < todayStr
+                  const isEditing    = editingStay?.id === stay.id
+                  const isConfirming = confirmingDelete === stay.id
+                  return (
+                    <div
+                      key={stay.id}
+                      className={[
+                        'bg-stone-50 border border-stone-100 rounded-xl px-3 py-2.5 flex items-center justify-between gap-2 transition-all',
+                        isEditing ? 'ring-2 ring-stone-300' : '',
+                        isPast ? 'opacity-50' : '',
+                      ].join(' ')}
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-stone-800">{stay.location}</p>
+                        <p className="text-xs text-stone-400">
+                          {formatDate(stay.start_date)} – {formatDate(stay.end_date)}
+                          {stay.status === 'tentative' && <span className="ml-1.5 text-stone-400 italic">(tentative)</span>}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        {!isConfirming && (
+                          <button
+                            onClick={() => isEditing ? cancelForm() : openEdit(stay)}
+                            className="text-[11px] text-stone-400 hover:text-stone-600 border border-stone-200 rounded-lg px-2 py-0.5 bg-white transition-colors"
+                          >
+                            {isEditing ? 'Cancel' : 'Edit'}
+                          </button>
+                        )}
+                        {!isEditing && (
+                          isConfirming ? (
+                            <div className="flex items-center gap-1">
+                              <span className="text-[11px] text-stone-500">Delete?</span>
+                              <button
+                                onClick={() => handleManageDelete(stay.id)}
+                                className="text-[11px] text-red-600 border border-red-200 rounded-lg px-2 py-0.5 bg-white hover:bg-red-50 transition-colors"
+                              >Yes</button>
+                              <button
+                                onClick={() => setConfirmingDelete(null)}
+                                className="text-[11px] text-stone-500 border border-stone-200 rounded-lg px-2 py-0.5 bg-white hover:bg-stone-50 transition-colors"
+                              >No</button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => setConfirmingDelete(stay.id)}
+                              className="text-[11px] text-stone-300 hover:text-red-500 border border-stone-200 rounded-lg px-2 py-0.5 bg-white transition-colors"
+                            >Delete</button>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Add / Edit form */}
+            {showForm ? (
+              <div ref={manageFormRef} className="bg-stone-50 border border-stone-200 rounded-2xl p-4 space-y-3">
+                <h4 className="text-sm font-semibold text-stone-700">
+                  {editingStay ? `Edit stay — ${PERSON_LABELS[managePerson]}` : `Add stay for ${PERSON_LABELS[managePerson]}`}
+                </h4>
+                <form onSubmit={handleManageSubmit} className="space-y-3">
+                  <input
+                    type="text"
+                    value={mloc}
+                    onChange={e => setMloc(e.target.value)}
+                    placeholder="Location *"
+                    autoFocus
+                    className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300 transition-colors"
+                  />
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs text-stone-400 mb-1">From</label>
+                      <input
+                        type="date"
+                        value={mstart}
+                        onChange={e => { setMstart(e.target.value); if (!mend) setMend(e.target.value) }}
+                        className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300 transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-stone-400 mb-1">To</label>
+                      <input
+                        type="date"
+                        value={mend}
+                        min={mstart}
+                        onChange={e => setMend(e.target.value)}
+                        className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300 transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-stone-400 mb-1.5">Status</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setMstatus('confirmed')}
+                        className={`py-2 rounded-xl text-sm border transition-colors ${mstatus === 'confirmed' ? 'bg-stone-800 text-white border-stone-800' : 'border-stone-200 text-stone-600 bg-white hover:bg-stone-50'}`}
+                      >✓ Confirmed</button>
+                      <button
+                        type="button"
+                        onClick={() => setMstatus('tentative')}
+                        className={`py-2 rounded-xl text-sm border transition-colors ${mstatus === 'tentative' ? 'bg-stone-500 text-white border-stone-500' : 'border-stone-200 text-stone-600 bg-white hover:bg-stone-50'}`}
+                      >? Tentative</button>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-stone-400">
+                    Travel details (flights, trains) can be added in the My Schedule tab.
+                  </p>
+                  <div className="flex gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={cancelForm}
+                      className="flex-1 py-2.5 border border-stone-200 rounded-xl text-sm text-stone-600 hover:bg-white transition-colors"
+                    >Cancel</button>
+                    <button
+                      type="submit"
+                      disabled={mloading}
+                      className="flex-1 py-2.5 text-white rounded-xl text-sm font-medium transition-colors disabled:opacity-50"
+                      style={{ backgroundColor: PERSON_COLORS[managePerson] }}
+                    >
+                      {mloading ? 'Saving…' : editingStay ? 'Save changes' : `Add for ${PERSON_LABELS[managePerson]}`}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : (
+              <button
+                onClick={openAdd}
+                className="w-full py-2.5 border-2 border-dashed border-stone-200 rounded-xl text-sm text-stone-400 hover:text-stone-600 hover:border-stone-300 transition-colors"
+              >
+                + Add stay for {PERSON_LABELS[managePerson]}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

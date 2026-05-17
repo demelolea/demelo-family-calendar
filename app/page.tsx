@@ -215,6 +215,8 @@ export default function Home() {
                 phoebeSchedule={phoebeSchedule}
                 stays={stays}
                 guests={guests}
+                tripRsvps={tripRsvps}
+                onRefresh={fetchAll}
               />
             )}
             {tab === 'schedule' && (
