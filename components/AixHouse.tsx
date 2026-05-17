@@ -220,7 +220,7 @@ export default function AixHouse({ roomAllocations, stays, guests, onRefresh }: 
       {/* ── Header ── */}
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-stone-800">🏠 Aix Rooms</h2>
+          <h2 className="font-serif text-xl font-semibold text-stone-800">🏠 Aix Rooms</h2>
           <p className="text-sm text-stone-400 mt-0.5">Room allocation — May to August 2026</p>
         </div>
         <button

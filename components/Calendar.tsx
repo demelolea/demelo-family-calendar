@@ -73,6 +73,23 @@ export default function Calendar({ events, phoebeSchedule, guests, stays, onRefr
         type: 'phoebe',
       })
     })
+    // Phoebe handover markers — amber entry on the first day of each custody change
+    const sortedPhoebe = [...phoebeSchedule].sort((a, b) => a.start_date.localeCompare(b.start_date))
+    for (let i = 1; i < sortedPhoebe.length; i++) {
+      const prev = sortedPhoebe[i - 1]
+      const curr = sortedPhoebe[i]
+      if (prev.with_whom !== curr.with_whom) {
+        entries.push({
+          id: `handover-${curr.id}`,
+          title: `🐾 ${prev.with_whom} → ${curr.with_whom}`,
+          person: 'phoebe',
+          color: '#D97706',   // amber-600 — distinct from standard phoebe gold
+          start_date: curr.start_date,
+          end_date: curr.start_date,
+          type: 'handover',
+        })
+      }
+    }
     guests.forEach(g => {
       entries.push({
         id: g.id,
@@ -118,7 +135,7 @@ export default function Calendar({ events, phoebeSchedule, guests, stays, onRefr
       <div className="flex items-center justify-between mb-5">
         <div className="flex items-center gap-1">
           <button onClick={prevMonth} className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-stone-100 active:bg-stone-200 transition-colors text-stone-500" aria-label="Previous month">‹</button>
-          <h2 className="text-lg font-semibold text-stone-800 min-w-[170px] text-center">{MONTH_NAMES[month]} {year}</h2>
+          <h2 className="font-serif text-xl font-semibold text-stone-800 min-w-[170px] text-center">{MONTH_NAMES[month]} {year}</h2>
           <button onClick={nextMonth} className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-stone-100 active:bg-stone-200 transition-colors text-stone-500" aria-label="Next month">›</button>
         </div>
         <div className="flex items-center gap-2">

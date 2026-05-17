@@ -16,10 +16,10 @@ interface WhoAreYouProps {
 
 export default function WhoAreYou({ onSelect }: WhoAreYouProps) {
   return (
-    <div className="min-h-screen bg-[#F8F6F2] flex items-center justify-center p-6">
+    <div className="min-h-screen bg-[#FAF8F3] flex items-center justify-center p-6">
       <div className="w-full max-w-xs">
         <div className="text-center mb-10">
-          <h1 className="text-3xl font-semibold text-stone-800 tracking-tight">De Melo</h1>
+          <h1 className="font-serif text-5xl font-semibold text-stone-800 tracking-tight">De Melo</h1>
           <p className="text-sm text-stone-400 mt-3">Welcome. Who are you?</p>
         </div>
 

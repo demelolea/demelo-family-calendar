@@ -36,7 +36,7 @@ export default function DayModal({ date, entries, onClose, onAddEvent }: DayModa
               <p className="text-xs font-medium text-stone-400 uppercase tracking-wider mb-0.5">
                 {MONTH_NAMES[date.getMonth()]} {date.getFullYear()}
               </p>
-              <h3 className="text-2xl font-semibold text-stone-800 leading-none">{date.getDate()}</h3>
+              <h3 className="font-serif text-3xl font-semibold text-stone-800 leading-none">{date.getDate()}</h3>
             </div>
             <button onClick={onClose} className="w-8 h-8 flex items-center justify-center rounded-full hover:bg-stone-100 text-stone-400 transition-colors text-lg">×</button>
           </div>

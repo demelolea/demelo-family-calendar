@@ -102,7 +102,7 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-stone-800">Guest Visits</h2>
+          <h2 className="font-serif text-xl font-semibold text-stone-800">Guest Visits</h2>
           <p className="text-sm text-stone-400 mt-0.5">Visitors to Aix & Geneva</p>
         </div>
         <button onClick={() => setShowForm(v => !v)} className="px-3 py-1.5 bg-stone-800 text-white text-sm rounded-xl hover:bg-stone-700 active:bg-stone-900 transition-colors font-medium">

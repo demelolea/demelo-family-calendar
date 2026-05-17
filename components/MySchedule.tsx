@@ -216,7 +216,7 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
         <div>
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: color }} />
-            <h2 className="text-lg font-semibold text-stone-800">My Schedule</h2>
+            <h2 className="font-serif text-xl font-semibold text-stone-800">My Schedule</h2>
           </div>
           <p className="text-sm text-stone-400 mt-0.5">{label}'s personal stays</p>
           {baseLocation && (

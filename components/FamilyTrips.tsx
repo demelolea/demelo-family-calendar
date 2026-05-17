@@ -192,7 +192,7 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
     <div className="space-y-6">
       <div className="flex items-start justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-stone-800">Family Trips</h2>
+          <h2 className="font-serif text-xl font-semibold text-stone-800">Family Trips</h2>
           <p className="text-sm text-stone-400 mt-0.5">Equestrian events & family travel</p>
         </div>
         <button

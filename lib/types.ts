@@ -77,7 +77,7 @@ export interface CalendarEntry {
   start_date: string
   end_date: string
   location?: string
-  type: 'event' | 'phoebe' | 'guest' | 'stay'
+  type: 'event' | 'phoebe' | 'guest' | 'stay' | 'handover'
   transport_type?: string
   travel_direction?: string
   transport_station?: string

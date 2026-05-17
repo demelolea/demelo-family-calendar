@@ -25,6 +25,35 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 const WIDE_TABS: Tab[] = ['overview', 'aix']
+const VALID_USERS = ['jim', 'isabelle', 'elissa', 'ines', 'lea']
+
+// Elegant dachshund silhouette SVG
+function DachshundIcon({ className }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 52 26"
+      fill="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      {/* body */}
+      <ellipse cx="24" cy="17" rx="16" ry="6.5" />
+      {/* head */}
+      <ellipse cx="38" cy="12" rx="8" ry="6.5" />
+      {/* snout */}
+      <ellipse cx="45.5" cy="14.5" rx="3.5" ry="2.8" />
+      {/* ear — droopy */}
+      <ellipse cx="34" cy="7" rx="4.5" ry="6" transform="rotate(-8 34 7)" />
+      {/* tail — curled */}
+      <path d="M8 14 Q2 10 3 5 Q6 1 10 5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" />
+      {/* legs */}
+      <rect x="15" y="21" width="3" height="5" rx="1.5" />
+      <rect x="21" y="21" width="3" height="5" rx="1.5" />
+      <rect x="28" y="21" width="3" height="5" rx="1.5" />
+      <rect x="34" y="21" width="3" height="5" rx="1.5" />
+    </svg>
+  )
+}
 
 export default function Home() {
   const [tab, setTab]           = useState<Tab>('calendar')
@@ -41,10 +70,18 @@ export default function Home() {
   const [loading, setLoading]               = useState(true)
   const [connected, setConnected]           = useState(false)
 
-  // SSR-safe: read identity from localStorage after mount
+  // SSR-safe: read identity from localStorage + ?user= param after mount
   useEffect(() => {
-    const saved = localStorage.getItem('demelo_identity')
-    if (saved) setCurrentUser(saved)
+    const params   = new URLSearchParams(window.location.search)
+    const paramUser = params.get('user')?.toLowerCase() ?? null
+
+    if (paramUser && VALID_USERS.includes(paramUser)) {
+      localStorage.setItem('demelo_identity', paramUser)
+      setCurrentUser(paramUser)
+    } else {
+      const saved = localStorage.getItem('demelo_identity')
+      if (saved) setCurrentUser(saved)
+    }
     setMounted(true)
   }, [])
 
@@ -101,12 +138,15 @@ export default function Home() {
   const isWide = WIDE_TABS.includes(tab)
 
   return (
-    <div className="min-h-screen bg-[#F8F6F2]">
+    <div className="min-h-screen bg-[#FAF8F3]">
       {/* Header */}
       <header className="bg-white border-b border-stone-100 sticky top-0 z-20">
         <div className="max-w-5xl mx-auto px-4">
           <div className="flex items-center justify-between h-12">
-            <span className="text-[15px] font-semibold text-stone-800 tracking-tight">De Melo</span>
+            <div className="flex items-center gap-2">
+              <DachshundIcon className="w-8 h-4 text-stone-400" />
+              <span className="font-serif text-lg font-semibold text-stone-800 tracking-tight leading-none">De Melo</span>
+            </div>
             <div className="flex items-center gap-3">
               {/* Identity badge — tap to switch */}
               <button
@@ -174,6 +214,7 @@ export default function Home() {
                 locations={locations}
                 phoebeSchedule={phoebeSchedule}
                 stays={stays}
+                guests={guests}
               />
             )}
             {tab === 'schedule' && (
