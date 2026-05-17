@@ -1,10 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import {
-  RoomAllocation, Stay, Guest,
-  AIX_ROOMS, PERSON_COLORS, PERSON_LABELS, hexToRgba,
-} from '@/lib/types'
+import { RoomAllocation, Stay, Guest, AIX_ROOMS, PERSON_COLORS, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 
 interface AixHouseProps {
@@ -14,553 +11,561 @@ interface AixHouseProps {
   onRefresh: () => void
 }
 
-const MONTHS = [
-  { label: 'May',    days: 31, month: 4 },
-  { label: 'June',   days: 30, month: 5 },
-  { label: 'July',   days: 31, month: 6 },
-  { label: 'August', days: 31, month: 7 },
-]
-
-const DAY_W   = 34
-const NAME_W  = 140
-const STRIP_H = 17   // height per person strip in a shared cell
-const MIN_ROW = 38   // minimum row height when room is empty
-
-const FAMILY_MEMBER_NAMES = ['Jim', 'Isabelle', 'Elissa', 'Ines', 'Lea']
-
-function generateDays(): Date[] {
-  const out: Date[] = []
-  for (const m of MONTHS) for (let d = 1; d <= m.days; d++) out.push(new Date(2026, m.month, d))
-  return out
-}
-
 function toDateStr(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + n)
+  return toDateStr(d)
 }
 
 function fmtShort(d: string) {
   return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
 }
 
+function fmtLong(d: string) {
+  return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', {
+    weekday: 'long', day: 'numeric', month: 'long',
+  })
+}
+
+function weekStart(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00')
+  const dow = d.getDay()
+  const diff = dow === 0 ? -6 : 1 - dow  // Monday-start
+  return addDays(dateStr, diff)
+}
+
+type PersonEntry = {
+  key: string
+  displayName: string
+  color: string
+  type: 'family' | 'guest'
+  stayStart: string
+  stayEnd: string
+  guestId?: string          // for guests: Guest.id
+  assignedRoom: string | null
+  allocationId: string | null  // room_allocations.id, if exists
+}
+
+type ViewMode = 'day' | 'week'
+
+const ROOM_LABEL = (id: string) => AIX_ROOMS.find(r => r.id === id)?.label ?? id
+
 export default function AixHouse({ roomAllocations, stays, guests, onRefresh }: AixHouseProps) {
   const todayStr = toDateStr(new Date())
-  const days     = useMemo(generateDays, [])
 
-  // ── Occupant map ─────────────────────────────────────────────────────────────
-  // roomId → dateStr → [{name, color}]
-  type OccEntry = { name: string; color: string }
-  const occupantMap = useMemo(() => {
-    const map: Record<string, Record<string, OccEntry[]>> = {}
-    for (const r of AIX_ROOMS) map[r.id] = {}
+  const [selectedDate, setSelectedDate] = useState(todayStr)
+  const [viewMode, setViewMode]         = useState<ViewMode>('day')
+  const [drawerPerson, setDrawerPerson] = useState<PersonEntry | null>(null)
+  const [saving, setSaving]             = useState(false)
 
-    // Room allocations (manual / family assigned from unallocated section)
-    for (const a of roomAllocations) {
-      if (!map[a.room]) continue
-      for (const day of days) {
-        const ds = toDateStr(day)
-        if (a.start_date > ds || a.end_date < ds) continue
-        if (!map[a.room][ds]) map[a.room][ds] = []
-        const col = PERSON_COLORS[a.occupant_name.toLowerCase()] ?? '#8A8A8A'
-        map[a.room][ds].push({ name: a.occupant_name, color: col })
-      }
+  // ── Compute people in Aix on a given date ───────────────────────────────
+  const computePeople = (dateStr: string): PersonEntry[] => {
+    const people: PersonEntry[] = []
+
+    for (const stay of stays) {
+      if (!stay.location.toLowerCase().includes('aix')) continue
+      if (stay.start_date > dateStr || stay.end_date < dateStr) continue
+      const displayName = PERSON_LABELS[stay.person] ?? stay.person
+      const alloc = roomAllocations.find(a =>
+        a.occupant_name.toLowerCase() === displayName.toLowerCase() &&
+        a.start_date <= dateStr && a.end_date >= dateStr,
+      )
+      people.push({
+        key: `family-${stay.id}`,
+        displayName,
+        color: PERSON_COLORS[stay.person] ?? '#8A8A8A',
+        type: 'family',
+        stayStart: stay.start_date,
+        stayEnd: stay.end_date,
+        assignedRoom: alloc?.room ?? null,
+        allocationId: alloc?.id ?? null,
+      })
     }
 
-    // Guests whose allocated_room is set
     for (const g of guests) {
-      if (g.house !== 'aix' || !g.allocated_room) continue
-      const roomId = g.allocated_room
-      if (!map[roomId]) continue
-      for (const day of days) {
-        const ds = toDateStr(day)
-        if (g.arrival_date > ds || g.departure_date < ds) continue
-        if (!map[roomId][ds]) map[roomId][ds] = []
-        map[roomId][ds].push({ name: g.guest_name, color: '#8A8A8A' })
-      }
-    }
-
-    return map
-  }, [roomAllocations, guests, days])
-
-  // Per-room row height — expands to fit concurrent occupants
-  const rowHeights = useMemo(() => {
-    const out: Record<string, number> = {}
-    for (const r of AIX_ROOMS) {
-      let max = 0
-      for (const day of days) {
-        const n = (occupantMap[r.id]?.[toDateStr(day)] ?? []).length
-        if (n > max) max = n
-      }
-      out[r.id] = Math.max(MIN_ROW, max * STRIP_H + 8)
-    }
-    return out
-  }, [occupantMap, days])
-
-  // ── Unallocated section ───────────────────────────────────────────────────────
-  // Family members with an Aix stay that has no overlapping room allocation
-  const unallocatedFamily = useMemo(() =>
-    stays
-      .filter(s => s.location.toLowerCase().includes('aix') && s.end_date >= todayStr)
-      .filter(s => {
-        const lbl = (PERSON_LABELS[s.person] ?? s.person).toLowerCase()
-        return !roomAllocations.some(a =>
-          a.occupant_name.toLowerCase() === lbl &&
-          a.start_date <= s.end_date && a.end_date >= s.start_date,
-        )
+      if (g.house !== 'aix') continue
+      if (g.arrival_date > dateStr || g.departure_date < dateStr) continue
+      const alloc = roomAllocations.find(a =>
+        a.occupant_name.toLowerCase() === g.guest_name.toLowerCase() &&
+        a.start_date <= dateStr && a.end_date >= dateStr,
+      )
+      const roomId = alloc?.room ?? g.allocated_room ?? null
+      people.push({
+        key: `guest-${g.id}`,
+        displayName: g.guest_name,
+        color: '#8A8A8A',
+        type: 'guest',
+        stayStart: g.arrival_date,
+        stayEnd: g.departure_date,
+        guestId: g.id,
+        assignedRoom: roomId,
+        allocationId: alloc?.id ?? null,
       })
-      .sort((a, b) => a.start_date.localeCompare(b.start_date)),
-  [stays, roomAllocations, todayStr])
-
-  // Aix guests with no room assigned
-  const unallocatedGuests = useMemo(() =>
-    guests
-      .filter(g => g.house === 'aix' && !g.allocated_room && g.departure_date >= todayStr)
-      .sort((a, b) => a.arrival_date.localeCompare(b.arrival_date)),
-  [guests, todayStr])
-
-  const hasUnallocated = unallocatedFamily.length > 0 || unallocatedGuests.length > 0
-
-  // ── Assign-from-unallocated flow ─────────────────────────────────────────────
-  type AssignTarget =
-    | { type: 'family'; stay: Stay }
-    | { type: 'guest';  guest: Guest }
-
-  const [assignTarget, setAssignTarget] = useState<AssignTarget | null>(null)
-  const [assignRoom,   setAssignRoom]   = useState('')
-  const [assignStart,  setAssignStart]  = useState('')
-  const [assignEnd,    setAssignEnd]    = useState('')
-  const [assigning,    setAssigning]    = useState(false)
-
-  const openAssign = (target: AssignTarget) => {
-    setAssignTarget(target)
-    setAssignRoom('')
-    if (target.type === 'family') {
-      setAssignStart(target.stay.start_date)
-      setAssignEnd(target.stay.end_date)
-    } else {
-      setAssignStart(target.guest.arrival_date)
-      setAssignEnd(target.guest.departure_date)
     }
-  }
 
-  const closeAssign = () => setAssignTarget(null)
-
-  const handleAssign = async () => {
-    if (!assignRoom || !assignTarget) return
-    setAssigning(true)
-    if (assignTarget.type === 'family') {
-      await supabase.from('room_allocations').insert({
-        room:          assignRoom,
-        occupant_name: PERSON_LABELS[assignTarget.stay.person] ?? assignTarget.stay.person,
-        start_date:    assignStart,
-        end_date:      assignEnd,
-      })
-    } else {
-      await supabase.from('guests')
-        .update({ allocated_room: assignRoom })
-        .eq('id', assignTarget.guest.id)
-    }
-    setAssigning(false)
-    setAssignTarget(null)
-    onRefresh()
-  }
-
-  const isTargeted = (t: AssignTarget) => {
-    if (!assignTarget) return false
-    if (assignTarget.type !== t.type) return false
-    if (t.type === 'family' && assignTarget.type === 'family')
-      return assignTarget.stay.id === t.stay.id
-    if (t.type === 'guest' && assignTarget.type === 'guest')
-      return assignTarget.guest.id === t.guest.id
-    return false
-  }
-
-  // ── Manual add form ───────────────────────────────────────────────────────────
-  const [showForm,     setShowForm]     = useState(false)
-  const [room,         setRoom]         = useState<string>(AIX_ROOMS[0].id)
-  const [occType,      setOccType]      = useState<'family' | 'guest'>('family')
-  const [famMember,    setFamMember]    = useState('Jim')
-  const [guestName,    setGuestName]    = useState('')
-  const [startDate,    setStartDate]    = useState('')
-  const [endDate,      setEndDate]      = useState('')
-  const [notes,        setNotes]        = useState('')
-  const [loading,      setLoading]      = useState(false)
-  const [deleting,     setDeleting]     = useState<string | null>(null)
-
-  const handleManualSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const occupant = occType === 'family' ? famMember : guestName.trim()
-    if (!occupant || !startDate || !endDate) return
-    setLoading(true)
-    await supabase.from('room_allocations').insert({
-      room, occupant_name: occupant, start_date: startDate, end_date: endDate,
-      notes: notes.trim() || null,
+    return people.sort((a, b) => {
+      if (!a.assignedRoom && b.assignedRoom) return -1
+      if (a.assignedRoom && !b.assignedRoom) return 1
+      return a.displayName.localeCompare(b.displayName)
     })
-    setLoading(false)
-    setShowForm(false)
-    setGuestName(''); setNotes(''); setStartDate(''); setEndDate('')
+  }
+
+  const peopleOnDate = useMemo(() => computePeople(selectedDate),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [selectedDate, stays, guests, roomAllocations],
+  )
+
+  // Week view — 7 days starting Monday
+  const weekDays = useMemo(() => {
+    const mon = weekStart(selectedDate)
+    return Array.from({ length: 7 }, (_, i) => addDays(mon, i))
+  }, [selectedDate])
+
+  const weekCounts = useMemo(() =>
+    weekDays.map(d => ({ date: d, count: computePeople(d).length })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [weekDays, stays, guests, roomAllocations],
+  )
+
+  // Room occupants for selected date
+  const roomOccupants = useMemo(() => {
+    const map: Record<string, PersonEntry[]> = {}
+    for (const r of AIX_ROOMS) {
+      map[r.id] = peopleOnDate.filter(p => p.assignedRoom === r.id)
+    }
+    return map
+  }, [peopleOnDate])
+
+  const totalCount     = peopleOnDate.length
+  const familyCount    = peopleOnDate.filter(p => p.type === 'family').length
+  const guestCount     = peopleOnDate.filter(p => p.type === 'guest').length
+  const assignedCount  = peopleOnDate.filter(p => p.assignedRoom).length
+  const unassignedCount = totalCount - assignedCount
+
+  // ── Actions ─────────────────────────────────────────────────────────────
+  const assignToRoom = async (roomId: string) => {
+    if (!drawerPerson || saving) return
+    setSaving(true)
+
+    // Delete any existing allocation first (for both family and guests)
+    if (drawerPerson.allocationId) {
+      await supabase.from('room_allocations').delete().eq('id', drawerPerson.allocationId)
+    }
+
+    if (drawerPerson.type === 'guest' && drawerPerson.guestId) {
+      // Guests: store in guests.allocated_room (simple, covers whole stay)
+      await supabase.from('guests')
+        .update({ allocated_room: roomId })
+        .eq('id', drawerPerson.guestId)
+    } else {
+      // Family: store in room_allocations with their stay dates
+      await supabase.from('room_allocations').insert({
+        room:          roomId,
+        occupant_name: drawerPerson.displayName,
+        start_date:    drawerPerson.stayStart,
+        end_date:      drawerPerson.stayEnd,
+      })
+    }
+
+    setSaving(false)
+    setDrawerPerson(null)
     onRefresh()
   }
 
-  const handleDelete = async (id: string) => {
-    setDeleting(id)
-    await supabase.from('room_allocations').delete().eq('id', id)
-    setDeleting(null)
+  const removeFromRoom = async () => {
+    if (!drawerPerson || saving) return
+    setSaving(true)
+
+    if (drawerPerson.allocationId) {
+      await supabase.from('room_allocations').delete().eq('id', drawerPerson.allocationId)
+    }
+    if (drawerPerson.type === 'guest' && drawerPerson.guestId) {
+      await supabase.from('guests')
+        .update({ allocated_room: null })
+        .eq('id', drawerPerson.guestId)
+    }
+
+    setSaving(false)
+    setDrawerPerson(null)
     onRefresh()
   }
 
-  const upcoming = [...roomAllocations]
-    .filter(a => a.end_date >= todayStr)
-    .sort((a, b) => a.start_date.localeCompare(b.start_date))
+  const openDrawer = (person: PersonEntry) => {
+    setDrawerPerson(prev => prev?.key === person.key ? null : person)
+  }
 
-  const totalWidth = NAME_W + DAY_W * days.length
-
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="space-y-6">
+    <div className="space-y-5 pb-10">
 
-      {/* ── Header ── */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h2 className="font-serif text-xl font-semibold text-stone-800">🏠 Aix Rooms</h2>
-          <p className="text-sm text-stone-400 mt-0.5">Room allocation — May to August 2026</p>
-        </div>
-        <button
-          onClick={() => { setShowForm(v => !v); closeAssign() }}
-          className="px-3 py-1.5 bg-stone-800 text-white text-sm rounded-xl hover:bg-stone-700 active:bg-stone-900 transition-colors font-medium"
-        >
-          + Assign room
-        </button>
+      {/* Header */}
+      <div>
+        <h2 className="font-serif text-xl font-semibold text-stone-800">🏠 Aix Rooms</h2>
+        <p className="text-sm text-stone-400 mt-0.5">Room planning · tap a person to assign them a room</p>
       </div>
 
-      {/* ── Unallocated section ── */}
-      {hasUnallocated && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
-          <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wider">
-            In Aix — no room assigned yet
-          </p>
+      {/* ── Section 1: Date selector + occupancy summary ── */}
+      <div className="bg-white border border-stone-200 rounded-2xl overflow-hidden">
 
-          <div className="flex flex-wrap gap-2">
-            {unallocatedFamily.map(s => {
-              const target: AssignTarget = { type: 'family', stay: s }
-              const active = isTargeted(target)
+        {/* Day / Week toggle */}
+        <div className="flex border-b border-stone-100">
+          {(['day', 'week'] as ViewMode[]).map(mode => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className={[
+                'flex-1 py-2.5 text-xs font-semibold uppercase tracking-wider transition-colors',
+                viewMode === mode
+                  ? 'bg-stone-800 text-white'
+                  : 'text-stone-400 hover:bg-stone-50',
+              ].join(' ')}
+            >
+              {mode === 'day' ? 'Single day' : 'Week view'}
+            </button>
+          ))}
+        </div>
+
+        {/* Day mode: date nav */}
+        {viewMode === 'day' && (
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-stone-100">
+            <button
+              onClick={() => setSelectedDate(d => addDays(d, -1))}
+              className="w-9 h-9 flex items-center justify-center rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50 transition-colors flex-shrink-0"
+            >‹</button>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={e => e.target.value && setSelectedDate(e.target.value)}
+              className="flex-1 text-center text-sm font-medium text-stone-700 border border-stone-200 rounded-xl px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
+            />
+            <button
+              onClick={() => setSelectedDate(d => addDays(d, 1))}
+              className="w-9 h-9 flex items-center justify-center rounded-xl border border-stone-200 text-stone-500 hover:bg-stone-50 transition-colors flex-shrink-0"
+            >›</button>
+          </div>
+        )}
+
+        {/* Week mode: 7-day strip */}
+        {viewMode === 'week' && (
+          <div className="grid grid-cols-7 border-b border-stone-100">
+            {weekCounts.map(({ date, count }) => {
+              const d       = new Date(date + 'T12:00:00')
+              const isToday = date === todayStr
+              const isSel   = date === selectedDate
+              const dayName = d.toLocaleDateString('en-GB', { weekday: 'short' })
+              const dayNum  = d.getDate()
               return (
                 <button
-                  key={s.id}
-                  onClick={() => active ? closeAssign() : openAssign(target)}
+                  key={date}
+                  onClick={() => { setSelectedDate(date); setViewMode('day') }}
                   className={[
-                    'flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs border transition-colors',
-                    active
-                      ? 'bg-stone-800 text-white border-stone-800'
-                      : 'bg-white border-amber-200 text-stone-700 hover:border-stone-400',
+                    'flex flex-col items-center py-3 gap-1 transition-colors border-r border-stone-100 last:border-r-0',
+                    isSel ? 'bg-stone-800 text-white' : isToday ? 'bg-amber-50' : 'hover:bg-stone-50',
                   ].join(' ')}
                 >
-                  <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: PERSON_COLORS[s.person] }} />
-                  <span className="font-medium">{PERSON_LABELS[s.person]}</span>
-                  <span className={active ? 'text-stone-300' : 'text-stone-400'}>
-                    {fmtShort(s.start_date)}–{fmtShort(s.end_date)}
+                  <span className={`text-[10px] font-semibold uppercase ${isSel ? 'text-stone-300' : 'text-stone-400'}`}>
+                    {dayName}
                   </span>
-                  {!active && <span className="text-amber-600">→ assign</span>}
-                </button>
-              )
-            })}
-
-            {unallocatedGuests.map(g => {
-              const target: AssignTarget = { type: 'guest', guest: g }
-              const active = isTargeted(target)
-              return (
-                <button
-                  key={g.id}
-                  onClick={() => active ? closeAssign() : openAssign(target)}
-                  className={[
-                    'flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs border transition-colors',
-                    active
-                      ? 'bg-stone-800 text-white border-stone-800'
-                      : 'bg-white border-amber-200 text-stone-700 hover:border-stone-400',
-                  ].join(' ')}
-                >
-                  <div className="w-2 h-2 rounded-full flex-shrink-0 bg-stone-400" />
-                  <span className="font-medium">{g.guest_name}</span>
-                  <span className={active ? 'text-stone-300' : 'text-stone-400'}>
-                    {fmtShort(g.arrival_date)}–{fmtShort(g.departure_date)}
+                  <span className={`text-sm font-bold ${isSel ? 'text-white' : isToday ? 'text-amber-700' : 'text-stone-700'}`}>
+                    {dayNum}
                   </span>
-                  {!active && <span className="text-amber-600">→ assign</span>}
+                  {count > 0 ? (
+                    <span className={`text-[11px] font-semibold ${isSel ? 'text-stone-200' : 'text-stone-600'}`}>
+                      {count}
+                    </span>
+                  ) : (
+                    <span className={`text-[11px] ${isSel ? 'text-stone-500' : 'text-stone-300'}`}>–</span>
+                  )}
                 </button>
               )
             })}
           </div>
+        )}
 
-          {/* Inline assign panel */}
-          {assignTarget && (
-            <div className="pt-3 border-t border-amber-200 space-y-2">
-              <p className="text-xs font-medium text-stone-700">
-                Assign room for{' '}
-                <span className="font-semibold">
-                  {assignTarget.type === 'family'
-                    ? PERSON_LABELS[assignTarget.stay.person]
-                    : assignTarget.guest.guest_name}
-                </span>
+        {/* Occupancy summary */}
+        <div className="px-4 py-4">
+          {totalCount === 0 ? (
+            <div className="text-center py-3">
+              <p className="text-sm font-medium text-stone-500">{fmtLong(selectedDate)}</p>
+              <p className="text-xs text-stone-400 mt-1 italic">No one in Aix on this date</p>
+            </div>
+          ) : (
+            <div className="bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-center">
+              <p className="text-3xl font-bold text-stone-800 leading-none">{totalCount}</p>
+              <p className="text-xs font-semibold text-stone-500 uppercase tracking-wider mt-1">
+                {fmtLong(selectedDate)}
               </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={assignRoom}
-                  onChange={e => setAssignRoom(e.target.value)}
-                  className="px-3 py-2 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                >
-                  <option value="">Pick a room…</option>
-                  {AIX_ROOMS.map(r => (
-                    <option key={r.id} value={r.id}>{r.label}</option>
-                  ))}
-                </select>
-                <input
-                  type="date"
-                  value={assignStart}
-                  onChange={e => setAssignStart(e.target.value)}
-                  className="px-3 py-2 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                />
-                <span className="text-stone-400 text-sm">–</span>
-                <input
-                  type="date"
-                  value={assignEnd}
-                  min={assignStart}
-                  onChange={e => setAssignEnd(e.target.value)}
-                  className="px-3 py-2 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                />
-                <button
-                  onClick={handleAssign}
-                  disabled={!assignRoom || !assignStart || !assignEnd || assigning}
-                  className="px-4 py-2 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 disabled:opacity-40 transition-colors"
-                >
-                  {assigning ? '…' : 'Confirm'}
-                </button>
-                <button
-                  onClick={closeAssign}
-                  className="px-3 py-2 border border-stone-200 text-sm text-stone-500 rounded-xl hover:bg-white transition-colors"
-                >
-                  Cancel
-                </button>
+              <div className="flex items-center justify-center gap-4 mt-2.5 text-sm">
+                {familyCount > 0 && (
+                  <span className="flex items-center gap-1.5 text-stone-600">
+                    <span className="w-2 h-2 rounded-full bg-stone-600 inline-block" />
+                    <span className="font-semibold">{familyCount}</span> family
+                  </span>
+                )}
+                {guestCount > 0 && (
+                  <span className="flex items-center gap-1.5 text-stone-500">
+                    <span className="w-2 h-2 rounded-full bg-stone-400 inline-block" />
+                    <span className="font-semibold">{guestCount}</span> {guestCount === 1 ? 'guest' : 'guests'}
+                  </span>
+                )}
               </div>
+              {unassignedCount > 0 && (
+                <p className="mt-2 text-xs font-semibold text-amber-700">
+                  ⚠ {unassignedCount} {unassignedCount === 1 ? 'person' : 'people'} not yet assigned to a room
+                </p>
+              )}
             </div>
           )}
         </div>
-      )}
-
-      {/* ── Manual assign form ── */}
-      {showForm && (
-        <div className="bg-stone-50 border border-stone-200 rounded-2xl p-4">
-          <h3 className="text-sm font-semibold text-stone-700 mb-3">Assign a room</h3>
-          <form onSubmit={handleManualSubmit} className="space-y-3">
-            <div>
-              <label className="block text-xs text-stone-400 mb-1">Room</label>
-              <select
-                value={room}
-                onChange={e => setRoom(e.target.value)}
-                className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-              >
-                {AIX_ROOMS.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs text-stone-400 mb-1.5">Occupant</label>
-              <div className="grid grid-cols-2 gap-2 mb-2">
-                {(['family', 'guest'] as const).map(t => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setOccType(t)}
-                    className={`py-2 rounded-xl text-sm border capitalize transition-colors ${
-                      occType === t
-                        ? 'bg-stone-800 text-white border-stone-800'
-                        : 'border-stone-200 text-stone-600 bg-white hover:bg-stone-50'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-              {occType === 'family' ? (
-                <select
-                  value={famMember}
-                  onChange={e => setFamMember(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                >
-                  {FAMILY_MEMBER_NAMES.map(m => <option key={m} value={m}>{m}</option>)}
-                </select>
-              ) : (
-                <input
-                  type="text"
-                  value={guestName}
-                  onChange={e => setGuestName(e.target.value)}
-                  placeholder="Guest name"
-                  className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                />
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-xs text-stone-400 mb-1">Check-in</label>
-                <input
-                  type="date" value={startDate}
-                  onChange={e => { setStartDate(e.target.value); if (!endDate) setEndDate(e.target.value) }}
-                  className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-stone-400 mb-1">Check-out</label>
-                <input
-                  type="date" value={endDate} min={startDate}
-                  onChange={e => setEndDate(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-                />
-              </div>
-            </div>
-
-            <input
-              type="text" value={notes} onChange={e => setNotes(e.target.value)}
-              placeholder="Notes (optional)"
-              className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
-            />
-
-            <div className="flex gap-2">
-              <button type="button" onClick={() => setShowForm(false)}
-                className="flex-1 py-2.5 border border-stone-200 rounded-xl text-sm text-stone-600 hover:bg-white transition-colors">
-                Cancel
-              </button>
-              <button type="submit" disabled={loading}
-                className="flex-1 py-2.5 bg-stone-800 text-white rounded-xl text-sm font-medium hover:bg-stone-700 transition-colors disabled:opacity-50">
-                {loading ? 'Saving…' : 'Assign'}
-              </button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {/* ── Room grid ── */}
-      <div className="rounded-2xl border border-stone-100 overflow-hidden bg-white shadow-sm">
-        <div className="overflow-x-auto">
-          <div style={{ minWidth: totalWidth }}>
-
-            {/* Month headers */}
-            <div className="flex border-b border-stone-100">
-              <div className="flex-shrink-0 sticky left-0 z-20 bg-stone-50 border-r border-stone-100" style={{ width: NAME_W }} />
-              {MONTHS.map(m => (
-                <div
-                  key={m.label}
-                  className="flex-shrink-0 bg-stone-50 border-r border-stone-200 flex items-center justify-center"
-                  style={{ width: DAY_W * m.days }}
-                >
-                  <span className="text-[11px] font-semibold text-stone-500 py-2">{m.label}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Day numbers */}
-            <div className="flex border-b border-stone-100">
-              <div className="flex-shrink-0 sticky left-0 z-20 bg-stone-50/80 border-r border-stone-100" style={{ width: NAME_W }} />
-              {days.map((day, i) => {
-                const isWknd = day.getDay() === 0 || day.getDay() === 6
-                const isTdy  = toDateStr(day) === todayStr
-                return (
-                  <div key={i}
-                    className="flex-shrink-0 flex items-center justify-center border-r border-stone-50"
-                    style={{ width: DAY_W, background: isTdy ? '#FDE68A' : isWknd ? '#FAFAF9' : '' }}>
-                    <span className={`text-[9px] ${isTdy ? 'font-bold text-amber-700' : 'text-stone-400'}`}>
-                      {day.getDate()}
-                    </span>
-                  </div>
-                )
-              })}
-            </div>
-
-            {/* Room rows */}
-            {AIX_ROOMS.map((r, ri) => {
-              const rowH = rowHeights[r.id] ?? MIN_ROW
-              return (
-                <div key={r.id} className={`flex ${ri < AIX_ROOMS.length - 1 ? 'border-b border-stone-100' : ''}`}>
-                  {/* Sticky name */}
-                  <div
-                    className="flex-shrink-0 sticky left-0 z-10 bg-white border-r border-stone-100 flex items-center px-3"
-                    style={{ width: NAME_W, height: rowH }}
-                  >
-                    <span className="text-xs font-medium text-stone-700">{r.label}</span>
-                  </div>
-
-                  {/* Day cells */}
-                  {days.map((day, i) => {
-                    const ds      = toDateStr(day)
-                    const occ     = occupantMap[r.id]?.[ds] ?? []
-                    const isWknd  = day.getDay() === 0 || day.getDay() === 6
-                    const isTdy   = ds === todayStr
-                    const emptyBg = isTdy ? '#FDE68A' : isWknd ? '#FAFAF9' : ''
-
-                    return (
-                      <div
-                        key={i}
-                        className="flex-shrink-0 flex flex-col justify-center border-r border-stone-50 overflow-hidden"
-                        style={{ width: DAY_W, height: rowH, background: occ.length === 0 ? emptyBg : '' }}
-                        title={occ.length > 0 ? occ.map(o => o.name).join(', ') : undefined}
-                      >
-                        {occ.map((o, oi) => (
-                          <div
-                            key={oi}
-                            className="w-full flex items-center justify-center flex-shrink-0"
-                            style={{
-                              height: STRIP_H,
-                              background: hexToRgba(o.color, 0.28),
-                              borderTop: oi > 0 ? '1px solid rgba(255,255,255,0.6)' : undefined,
-                            }}
-                          >
-                            <span style={{ color: o.color, fontSize: 8, fontWeight: 700, letterSpacing: -0.3 }}>
-                              {o.name.slice(0, 3).toUpperCase()}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )
-                  })}
-                </div>
-              )
-            })}
-          </div>
-        </div>
       </div>
 
-      {/* ── Upcoming list ── */}
-      {upcoming.length > 0 && (
+      {/* ── Section 2: People in Aix ── */}
+      {peopleOnDate.length > 0 && (
         <div className="space-y-2">
-          <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider">Current & upcoming</p>
-          {upcoming.map(a => {
-            const roomLabel = AIX_ROOMS.find(r => r.id === a.room)?.label ?? a.room
-            const dotColor  = PERSON_COLORS[a.occupant_name.toLowerCase()] ?? '#78716C'
+          <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider px-0.5">
+            People in Aix — tap to assign
+          </p>
+
+          {peopleOnDate.map(person => {
+            const isUnassigned = !person.assignedRoom
+            const isActive     = drawerPerson?.key === person.key
             return (
-              <div key={a.id} className="bg-white border border-stone-100 rounded-xl p-3.5 flex items-center justify-between shadow-sm">
-                <div className="flex items-start gap-3">
-                  <div className="w-2 h-2 rounded-full mt-1.5 flex-shrink-0" style={{ backgroundColor: dotColor }} />
-                  <div>
-                    <p className="text-sm font-medium text-stone-800">{a.occupant_name}</p>
-                    <p className="text-xs text-stone-400 mt-0.5">
-                      {roomLabel} · {fmtShort(a.start_date)} – {fmtShort(a.end_date)}
+              <button
+                key={person.key}
+                onClick={() => openDrawer(person)}
+                className={[
+                  'w-full flex items-center justify-between gap-3 rounded-2xl px-4 py-3 border transition-all text-left',
+                  isActive
+                    ? 'bg-stone-800 border-stone-800'
+                    : isUnassigned
+                      ? 'bg-amber-50 border-amber-200 hover:border-amber-400'
+                      : 'bg-white border-stone-100 hover:border-stone-300 shadow-sm',
+                ].join(' ')}
+              >
+                <div className="flex items-center gap-3 min-w-0">
+                  <div
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: isActive ? 'white' : person.color }}
+                  />
+                  <div className="min-w-0">
+                    <p className={`text-sm font-semibold leading-snug truncate ${isActive ? 'text-white' : 'text-stone-800'}`}>
+                      {person.displayName}
+                      {person.type === 'guest' && (
+                        <span className={`ml-1.5 text-[10px] font-normal ${isActive ? 'text-stone-400' : 'text-stone-400'}`}>
+                          guest
+                        </span>
+                      )}
                     </p>
-                    {a.notes && <p className="text-xs text-stone-400 italic mt-0.5">{a.notes}</p>}
+                    <p className={`text-xs mt-0.5 ${isActive ? 'text-stone-400' : 'text-stone-400'}`}>
+                      {fmtShort(person.stayStart)} – {fmtShort(person.stayEnd)}
+                    </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => handleDelete(a.id)}
-                  disabled={deleting === a.id}
-                  className="text-xs text-stone-300 hover:text-red-400 transition-colors px-2 py-1"
-                >
-                  {deleting === a.id ? '…' : '✕'}
-                </button>
-              </div>
+
+                <div className="flex-shrink-0">
+                  {isUnassigned ? (
+                    <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${isActive ? 'bg-stone-600 text-stone-200' : 'bg-amber-200 text-amber-800'}`}>
+                      Unassigned
+                    </span>
+                  ) : (
+                    <span className={`text-xs font-medium ${isActive ? 'text-stone-400' : 'text-stone-500'}`}>
+                      🛏 {ROOM_LABEL(person.assignedRoom!)}
+                    </span>
+                  )}
+                </div>
+              </button>
             )
           })}
         </div>
       )}
 
-      {roomAllocations.length === 0 && !hasUnallocated && !showForm && (
-        <div className="text-center py-16 text-stone-400 text-sm italic">
-          No rooms assigned yet.
+      {/* ── Section 3: Room cards ── */}
+      {peopleOnDate.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider px-0.5">
+            Rooms · {fmtShort(selectedDate)}
+          </p>
+
+          <div className="grid grid-cols-2 gap-2.5">
+            {AIX_ROOMS.map(r => {
+              const occupants = roomOccupants[r.id] ?? []
+              const hasOccupants = occupants.length > 0
+              return (
+                <div
+                  key={r.id}
+                  className={[
+                    'bg-white border rounded-2xl p-3.5 transition-all',
+                    hasOccupants ? 'border-stone-200 shadow-sm' : 'border-stone-100',
+                  ].join(' ')}
+                >
+                  <p className="text-[10px] font-semibold text-stone-400 uppercase tracking-wider mb-2.5">
+                    {r.label}
+                  </p>
+                  {!hasOccupants ? (
+                    <p className="text-xs text-stone-300 italic">Empty</p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {occupants.map(person => {
+                        const isActive = drawerPerson?.key === person.key
+                        return (
+                          <button
+                            key={person.key}
+                            onClick={() => openDrawer(person)}
+                            className="flex items-center gap-1.5 pl-2 pr-2.5 py-1 rounded-lg text-xs font-semibold transition-all"
+                            style={{
+                              backgroundColor: isActive
+                                ? '#1C1917'
+                                : `${person.color}28`,
+                              color: isActive ? 'white' : person.color,
+                            }}
+                          >
+                            <div
+                              className="w-1.5 h-1.5 rounded-full flex-shrink-0"
+                              style={{ backgroundColor: isActive ? 'white' : person.color }}
+                            />
+                            {person.displayName}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
+      )}
+
+      {/* ── Section 4: Occupancy total ── */}
+      {peopleOnDate.length > 0 && (
+        <div className="flex items-center justify-between bg-stone-50 border border-stone-200 rounded-2xl px-4 py-3">
+          <span className="text-sm text-stone-500">Rooms assigned</span>
+          <div className="flex items-center gap-2">
+            <div className="w-24 h-2 bg-stone-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-stone-700 rounded-full transition-all"
+                style={{ width: totalCount > 0 ? `${(assignedCount / totalCount) * 100}%` : '0%' }}
+              />
+            </div>
+            <span className="text-sm font-semibold text-stone-800">
+              {assignedCount} / {totalCount}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Empty state */}
+      {peopleOnDate.length === 0 && (
+        <div className="text-center py-16 text-stone-400 text-sm italic">
+          No one is staying in Aix on this date.
+        </div>
+      )}
+
+      {/* ── Bottom drawer ── */}
+      {drawerPerson && (
+        <>
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm"
+            onClick={() => setDrawerPerson(null)}
+          />
+
+          {/* Drawer */}
+          <div className="fixed inset-x-0 bottom-0 z-50 bg-white rounded-t-3xl shadow-2xl">
+            {/* Handle */}
+            <div className="w-10 h-1 bg-stone-200 rounded-full mx-auto mt-3 mb-1" />
+
+            <div className="px-4 pb-8 max-h-[80vh] overflow-y-auto">
+              {/* Person header */}
+              <div className="flex items-center justify-between py-3 border-b border-stone-100 mb-4">
+                <div className="flex items-center gap-3">
+                  <div
+                    className="w-3 h-3 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: drawerPerson.color }}
+                  />
+                  <div>
+                    <p className="text-base font-semibold text-stone-800 leading-snug">
+                      {drawerPerson.displayName}
+                      {drawerPerson.type === 'guest' && (
+                        <span className="ml-1.5 text-xs font-normal text-stone-400">guest</span>
+                      )}
+                    </p>
+                    <p className="text-xs text-stone-400">
+                      {fmtShort(drawerPerson.stayStart)} – {fmtShort(drawerPerson.stayEnd)}
+                      {drawerPerson.assignedRoom && (
+                        <span className="ml-2 text-stone-500">
+                          · currently in {ROOM_LABEL(drawerPerson.assignedRoom)}
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setDrawerPerson(null)}
+                  className="text-stone-400 hover:text-stone-600 transition-colors text-xl leading-none px-1"
+                >✕</button>
+              </div>
+
+              <p className="text-[11px] font-semibold text-stone-400 uppercase tracking-wider mb-3">
+                {drawerPerson.assignedRoom ? 'Move to a different room' : 'Choose a room'}
+              </p>
+
+              {/* Room options grid */}
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {AIX_ROOMS.map(r => {
+                  const isCurrent   = drawerPerson.assignedRoom === r.id
+                  const others      = (roomOccupants[r.id] ?? []).filter(p => p.key !== drawerPerson.key)
+                  return (
+                    <button
+                      key={r.id}
+                      onClick={() => assignToRoom(r.id)}
+                      disabled={saving}
+                      className={[
+                        'flex flex-col items-start p-3.5 rounded-2xl border text-left transition-all',
+                        isCurrent
+                          ? 'bg-stone-800 border-stone-800'
+                          : 'bg-white border-stone-200 hover:border-stone-400 hover:bg-stone-50 active:bg-stone-100',
+                      ].join(' ')}
+                    >
+                      <p className={`text-sm font-semibold leading-snug ${isCurrent ? 'text-white' : 'text-stone-700'}`}>
+                        {r.label}
+                      </p>
+                      {isCurrent && (
+                        <span className="text-[10px] text-stone-400 mt-0.5">✓ Current room</span>
+                      )}
+                      {others.length > 0 ? (
+                        <p className={`text-[11px] mt-1 ${isCurrent ? 'text-stone-400' : 'text-stone-400'}`}>
+                          + {others.map(p => p.displayName).join(', ')}
+                        </p>
+                      ) : !isCurrent ? (
+                        <p className="text-[11px] mt-1 text-stone-300">Empty</p>
+                      ) : null}
+                    </button>
+                  )
+                })}
+              </div>
+
+              {/* Remove option */}
+              {drawerPerson.assignedRoom && (
+                <button
+                  onClick={removeFromRoom}
+                  disabled={saving}
+                  className="w-full py-3.5 border border-red-200 text-red-500 rounded-2xl text-sm font-medium hover:bg-red-50 active:bg-red-100 transition-colors disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : `Remove from ${ROOM_LABEL(drawerPerson.assignedRoom)}`}
+                </button>
+              )}
+
+              {saving && !drawerPerson.assignedRoom && (
+                <p className="text-center text-sm text-stone-400 py-2">Saving…</p>
+              )}
+            </div>
+          </div>
+        </>
       )}
     </div>
   )
