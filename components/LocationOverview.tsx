@@ -147,6 +147,21 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
     return map
   }, [phoebeSchedule])
 
+  // Which person+date cells are displaying a tentative stay
+  const tentativeSet = useMemo(() => {
+    const set = new Set<string>()
+    for (const person of PEOPLE) {
+      for (const day of days) {
+        const ds = toDateStr(day)
+        // Personal events take priority — if one covers this day, it's not a stay
+        if (events.some(e => e.person === person && e.start_date <= ds && e.end_date >= ds && e.location)) continue
+        const stay = stays.find(s => s.person === person && s.start_date <= ds && s.end_date >= ds)
+        if (stay?.status === 'tentative') set.add(`${person}:${ds}`)
+      }
+    }
+    return set
+  }, [stays, events, days])
+
   const grid = useMemo(() => {
     const result: Record<string, Record<string, string>> = {}
 
@@ -341,6 +356,24 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
           <div className="w-3 h-3 rounded-sm border border-stone-200 bg-stone-100" />
           <span className="text-xs text-stone-500">Phoebe — colour = custodian</span>
         </div>
+
+        {/* Confirmed / Tentative indicators */}
+        <div className="w-full border-t border-stone-100 mt-0.5 pt-2 flex flex-wrap gap-x-5 gap-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <div className="w-3 h-3 rounded-sm bg-stone-300" />
+            <span className="text-xs text-stone-500">Confirmed stay</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div
+              className="w-3 h-3 rounded-sm"
+              style={{
+                background: '#D6D3D1',
+                backgroundImage: 'repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,255,255,0.6) 2px, rgba(255,255,255,0.6) 4px)',
+              }}
+            />
+            <span className="text-xs text-stone-500">Tentative stay</span>
+          </div>
+        </div>
       </div>
 
       {/* Grid */}
@@ -451,16 +484,25 @@ export default function LocationOverview({ events, locations, phoebeSchedule, st
                       )
                     }
 
-                    const loc     = grid[person]?.[ds] ?? ''
-                    const isEmpty = !loc
-                    const s       = isEmpty ? { background: '#FFFFFF', color: 'transparent' } : cellStyle(loc)
-                    const bg      = isTdy ? '#FDE68A' : isEmpty ? '#FFFFFF' : isWknd ? '#FAFAF8' : s.background
+                    const loc          = grid[person]?.[ds] ?? ''
+                    const isEmpty      = !loc
+                    const isTentative  = !isEmpty && tentativeSet.has(`${person}:${ds}`)
+                    const s            = isEmpty ? { background: '#FFFFFF', color: 'transparent' } : cellStyle(loc)
+                    const bg           = isTdy ? '#FDE68A' : isEmpty ? '#FFFFFF' : isWknd ? '#FAFAF8' : s.background
+                    const stripeImage  = isTentative
+                      ? 'repeating-linear-gradient(45deg, transparent, transparent 4px, rgba(255,255,255,0.55) 4px, rgba(255,255,255,0.55) 8px)'
+                      : undefined
                     return (
                       <div
                         key={i}
                         className="flex-shrink-0 flex items-center justify-center border-r border-stone-50"
-                        style={{ width: DAY_W, height: 38, background: bg }}
-                        title={isEmpty ? undefined : `${PERSON_LABELS[person]} · ${day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${loc}`}
+                        style={{
+                          width: DAY_W,
+                          height: 38,
+                          background: bg,
+                          backgroundImage: stripeImage,
+                        }}
+                        title={isEmpty ? undefined : `${PERSON_LABELS[person]} · ${day.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} · ${loc}${isTentative ? ' (tentative)' : ''}`}
                       >
                         {!isEmpty && (
                           <span style={{ color: isTdy ? '#92400E' : s.color, fontSize: 8, fontWeight: 600, letterSpacing: -0.2 }}>

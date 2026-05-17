@@ -19,6 +19,7 @@ export interface Stay {
   location: string
   start_date: string
   end_date: string
+  status: 'confirmed' | 'tentative'
   arr_transport_type?: string   // 'flight' | 'train' | 'car'
   arr_station?: string
   arr_time?: string
@@ -78,6 +79,7 @@ export interface CalendarEntry {
   end_date: string
   location?: string
   type: 'event' | 'phoebe' | 'guest' | 'stay' | 'handover'
+  status?: 'confirmed' | 'tentative'
   transport_type?: string
   travel_direction?: string
   transport_station?: string

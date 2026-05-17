@@ -120,11 +120,13 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
   const [depType, setDepType]       = useState('')
   const [depStation, setDepStation] = useState('')
   const [depTime, setDepTime]       = useState('')
+  const [status, setStatus]     = useState<'confirmed' | 'tentative'>('confirmed')
   const [loading, setLoading]   = useState(false)
   const [deleting, setDeleting] = useState<string | null>(null)
 
   const resetForm = () => {
     setLocation(''); setStartDate(''); setEndDate('')
+    setStatus('confirmed')
     setArrType(''); setArrStation(''); setArrTime('')
     setDepType(''); setDepStation(''); setDepTime('')
   }
@@ -138,6 +140,7 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
       location: location.trim(),
       start_date: startDate,
       end_date: endDate,
+      status,
       arr_transport_type: arrType || null,
       arr_station: (arrType && arrType !== 'car') ? (arrStation.trim() || null) : null,
       arr_time:    (arrType && arrType !== 'car') ? (arrTime || null) : null,
@@ -191,6 +194,11 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
             </div>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            {stay.status === 'tentative' && (
+              <span className="text-[10px] font-semibold bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">
+                Tentative
+              </span>
+            )}
             {isActive && (
               <span className="text-[10px] font-semibold bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full">
                 Now
@@ -264,6 +272,35 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
                   onChange={e => setEndDate(e.target.value)}
                   className="w-full px-3 py-2.5 border border-stone-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-stone-300"
                 />
+              </div>
+            </div>
+
+            {/* Confirmed / Tentative */}
+            <div>
+              <label className="block text-xs text-stone-400 mb-1.5">Status</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setStatus('confirmed')}
+                  className={`py-2 rounded-xl text-sm border transition-colors ${
+                    status === 'confirmed'
+                      ? 'bg-stone-800 text-white border-stone-800'
+                      : 'border-stone-200 text-stone-600 bg-white hover:bg-stone-50'
+                  }`}
+                >
+                  ✓ Confirmed
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStatus('tentative')}
+                  className={`py-2 rounded-xl text-sm border transition-colors ${
+                    status === 'tentative'
+                      ? 'bg-stone-500 text-white border-stone-500'
+                      : 'border-stone-200 text-stone-600 bg-white hover:bg-stone-50'
+                  }`}
+                >
+                  ? Tentative
+                </button>
               </div>
             </div>
 

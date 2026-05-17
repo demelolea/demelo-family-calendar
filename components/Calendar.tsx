@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo } from 'react'
-import { Event, PhoebeSchedule, Guest, Stay, CalendarEntry, PERSON_COLORS, PERSON_LABELS, TRANSPORT_ICONS } from '@/lib/types'
+import { Event, PhoebeSchedule, Guest, Stay, CalendarEntry, PERSON_COLORS, PERSON_LABELS, TRANSPORT_ICONS, hexToRgba } from '@/lib/types'
 import DayModal from './DayModal'
 import AddEventModal from './AddEventModal'
 
@@ -44,6 +44,7 @@ export default function Calendar({ events, phoebeSchedule, guests, stays, onRefr
         end_date: s.end_date,
         location: s.location,
         type: 'stay',
+        status: s.status ?? 'confirmed',
       })
     })
     events.forEach(e => {
@@ -176,10 +177,23 @@ export default function Calendar({ events, phoebeSchedule, guests, stays, onRefr
                   </div>
                   <div className="space-y-0.5">
                     {dayEntries.slice(0, 3).map(entry => {
-                      const icon = entry.transport_type ? TRANSPORT_ICONS[entry.transport_type] ?? '' : ''
+                      const icon        = entry.transport_type ? TRANSPORT_ICONS[entry.transport_type] ?? '' : ''
+                      const isTentative = entry.status === 'tentative'
                       return (
-                        <div key={`${entry.type}-${entry.id}`} className="rounded overflow-hidden" style={{ backgroundColor: entry.color }}>
-                          <div className="hidden sm:block text-[10px] text-white font-medium px-1.5 py-[2px] truncate leading-tight">
+                        <div
+                          key={`${entry.type}-${entry.id}`}
+                          className="rounded overflow-hidden"
+                          style={isTentative ? {
+                            backgroundColor: hexToRgba(entry.color, 0.15),
+                            border: `1.5px dashed ${entry.color}`,
+                          } : {
+                            backgroundColor: entry.color,
+                          }}
+                        >
+                          <div
+                            className="hidden sm:block text-[10px] font-medium px-1.5 py-[2px] truncate leading-tight"
+                            style={{ color: isTentative ? entry.color : 'white' }}
+                          >
                             {icon}{icon ? ' ' : ''}{entry.title}
                           </div>
                           <div className="sm:hidden h-1.5 w-full" />
