@@ -187,11 +187,11 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     if (editingStay) {
       await supabase.from('stays').update(payload).eq('id', editingStay.id)
       notifyFamily(currentUser, 'De Melo Update',
-        `${label} updated their stay in ${location.trim()}: ${fmtDate(startDate)} – ${fmtDate(endDate)}`)
+        `${label} updated their stay in ${location.trim()}: ${formatDate(startDate)} – ${formatDate(endDate)}`)
     } else {
       await supabase.from('stays').insert({ person: currentUser, ...payload })
       notifyFamily(currentUser, 'De Melo Update',
-        `${label} added a stay in ${location.trim()}: ${fmtDate(startDate)} – ${fmtDate(endDate)}`)
+        `${label} added a stay in ${location.trim()}: ${formatDate(startDate)} – ${formatDate(endDate)}`)
     }
 
     setLoading(false)
