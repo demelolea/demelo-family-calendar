@@ -3,6 +3,7 @@
 import { useState, useRef } from 'react'
 import { Event, TripRsvp, PERSON_COLORS, PERSON_LABELS, FAMILY_KEYS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { notifyFamily } from '@/lib/notify'
 
 interface FamilyTripsProps {
   events: Event[]
@@ -97,6 +98,13 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
     }
 
     setLoading(false)
+
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    if (editingTrip) {
+      notifyFamily(currentUser, 'Trip updated ✈️', `${actor} updated trip: ${name.trim()}`)
+    } else {
+      notifyFamily(currentUser, 'New trip added ✈️', `${actor} added a trip: ${name.trim()}, ${new Date(startDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`)
+    }
     resetForm()
     onRefresh()
   }
@@ -114,6 +122,11 @@ export default function FamilyTrips({ events, tripRsvps, currentUser, onRefresh 
       { onConflict: 'trip_id,person' },
     )
     setRsvpLoading(null)
+
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    const trip  = events.find(e => e.id === tripId)
+    const rsvpLabel = response === 'yes' ? 'is going ✓' : response === 'maybe' ? 'is a maybe ?' : 'can\'t make it ✕'
+    if (trip) notifyFamily(currentUser, 'RSVP update ✈️', `${actor} ${rsvpLabel} for ${trip.title}`)
     onRefresh()
   }
 

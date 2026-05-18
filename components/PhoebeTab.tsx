@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { PhoebeSchedule } from '@/lib/types'
+import { PhoebeSchedule, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { notifyFamily } from '@/lib/notify'
 
 interface PhoebeTabProps {
   phoebeSchedule: PhoebeSchedule[]
+  currentUser: string
   onRefresh: () => void
 }
 
@@ -18,7 +20,7 @@ function formatDate(d: string) {
   })
 }
 
-export default function PhoebeTab({ phoebeSchedule, onRefresh }: PhoebeTabProps) {
+export default function PhoebeTab({ phoebeSchedule, currentUser, onRefresh }: PhoebeTabProps) {
   const [showForm, setShowForm] = useState(false)
   const [withWhom, setWithWhom] = useState('Jim')
   const [startDate, setStartDate] = useState('')
@@ -77,6 +79,13 @@ export default function PhoebeTab({ phoebeSchedule, onRefresh }: PhoebeTabProps)
     }
 
     setLoading(false)
+
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    if (editingEntry) {
+      notifyFamily(currentUser, 'Phoebe updated 🐾', `${actor} updated Phoebe's stay with ${withWhom}`)
+    } else {
+      notifyFamily(currentUser, 'Phoebe update 🐾', `${actor} logged Phoebe with ${withWhom}: ${new Date(startDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })} – ${new Date(endDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`)
+    }
     resetForm()
     onRefresh()
   }

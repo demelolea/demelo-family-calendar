@@ -3,11 +3,13 @@
 import { useState, useMemo } from 'react'
 import { RoomAllocation, Stay, Guest, AIX_ROOMS, PERSON_COLORS, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { notifyFamily } from '@/lib/notify'
 
 interface AixHouseProps {
   roomAllocations: RoomAllocation[]
   stays: Stay[]
   guests: Guest[]
+  currentUser: string
   onRefresh: () => void
 }
 
@@ -54,7 +56,7 @@ type ViewMode = 'day' | 'week'
 
 const ROOM_LABEL = (id: string) => AIX_ROOMS.find(r => r.id === id)?.label ?? id
 
-export default function AixHouse({ roomAllocations, stays, guests, onRefresh }: AixHouseProps) {
+export default function AixHouse({ roomAllocations, stays, guests, currentUser, onRefresh }: AixHouseProps) {
   const todayStr = toDateStr(new Date())
 
   const [selectedDate, setSelectedDate] = useState(todayStr)
@@ -172,6 +174,8 @@ export default function AixHouse({ roomAllocations, stays, guests, onRefresh }: 
     }
 
     setSaving(false)
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    notifyFamily(currentUser, 'Room assigned 🏠', `${actor} assigned ${drawerPerson.displayName} to ${ROOM_LABEL(roomId)} in Aix`)
     setDrawerPerson(null)
     onRefresh()
   }
@@ -190,6 +194,8 @@ export default function AixHouse({ roomAllocations, stays, guests, onRefresh }: 
     }
 
     setSaving(false)
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    notifyFamily(currentUser, 'Room cleared 🏠', `${actor} removed ${drawerPerson.displayName} from their room in Aix`)
     setDrawerPerson(null)
     onRefresh()
   }

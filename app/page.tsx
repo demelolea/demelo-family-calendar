@@ -11,6 +11,7 @@ import PhoebeTab from '@/components/PhoebeTab'
 import GuestVisits from '@/components/GuestVisits'
 import AixHouse from '@/components/AixHouse'
 import WhoAreYou from '@/components/WhoAreYou'
+import InstallPrompt from '@/components/InstallPrompt'
 
 type Tab = 'calendar' | 'overview' | 'schedule' | 'trips' | 'phoebe' | 'guests' | 'aix'
 
@@ -139,6 +140,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#FAF8F3]">
+      <InstallPrompt />
       {/* Header */}
       <header className="bg-white border-b border-stone-100 sticky top-0 z-20">
         <div className="max-w-5xl mx-auto px-4">
@@ -236,16 +238,17 @@ export default function Home() {
               />
             )}
             {tab === 'phoebe' && (
-              <PhoebeTab phoebeSchedule={phoebeSchedule} onRefresh={fetchAll} />
+              <PhoebeTab phoebeSchedule={phoebeSchedule} currentUser={currentUser} onRefresh={fetchAll} />
             )}
             {tab === 'guests' && (
-              <GuestVisits guests={guests} onRefresh={fetchAll} />
+              <GuestVisits guests={guests} currentUser={currentUser} onRefresh={fetchAll} />
             )}
             {tab === 'aix' && (
               <AixHouse
                 roomAllocations={roomAllocations}
                 stays={stays}
                 guests={guests}
+                currentUser={currentUser}
                 onRefresh={fetchAll}
               />
             )}

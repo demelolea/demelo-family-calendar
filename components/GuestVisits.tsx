@@ -1,11 +1,13 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { Guest, AIX_ROOMS } from '@/lib/types'
+import { Guest, AIX_ROOMS, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { notifyFamily } from '@/lib/notify'
 
 interface GuestVisitsProps {
   guests: Guest[]
+  currentUser: string
   onRefresh: () => void
 }
 
@@ -17,7 +19,7 @@ function formatDate(d: string) {
   })
 }
 
-export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
+export default function GuestVisits({ guests, currentUser, onRefresh }: GuestVisitsProps) {
   const [showForm, setShowForm]       = useState(false)
   const [guestName, setGuestName]     = useState('')
   const [house, setHouse]             = useState<'aix' | 'geneva'>('aix')
@@ -97,6 +99,12 @@ export default function GuestVisits({ guests, onRefresh }: GuestVisitsProps) {
       return
     }
 
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    if (editingGuest) {
+      notifyFamily(currentUser, 'Guest updated 🏠', `${actor} updated guest: ${guestName.trim()}`)
+    } else {
+      notifyFamily(currentUser, 'Guest arriving 🏠', `${actor} added a guest: ${guestName.trim()}, arriving ${new Date(arrivalDate + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`)
+    }
     resetForm()
     onRefresh()
   }

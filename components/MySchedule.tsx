@@ -3,6 +3,8 @@
 import { useState, useRef } from 'react'
 import { Stay, Location, PERSON_COLORS, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
+import { notifyFamily } from '@/lib/notify'
+import NotificationPrompt from './NotificationPrompt'
 
 interface MyScheduleProps {
   currentUser: string
@@ -184,8 +186,12 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
 
     if (editingStay) {
       await supabase.from('stays').update(payload).eq('id', editingStay.id)
+      notifyFamily(currentUser, 'De Melo Update',
+        `${label} updated their stay in ${location.trim()}: ${fmtDate(startDate)} – ${fmtDate(endDate)}`)
     } else {
       await supabase.from('stays').insert({ person: currentUser, ...payload })
+      notifyFamily(currentUser, 'De Melo Update',
+        `${label} added a stay in ${location.trim()}: ${fmtDate(startDate)} – ${fmtDate(endDate)}`)
     }
 
     setLoading(false)
@@ -302,6 +308,7 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
 
   return (
     <div className="space-y-6">
+      <NotificationPrompt currentUser={currentUser} />
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
