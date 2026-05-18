@@ -8,7 +8,7 @@ function urlBase64ToUint8Array(b64: string): Uint8Array {
   const padding = '='.repeat((4 - (b64.length % 4)) % 4)
   const base64  = (b64 + padding).replace(/-/g, '+').replace(/_/g, '/')
   const raw     = atob(base64)
-  return Uint8Array.from(Array.from(raw, c => c.charCodeAt(0)))
+  return new Uint8Array(Array.from(raw, c => c.charCodeAt(0)))
 }
 
 interface Props {
