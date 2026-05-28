@@ -12,6 +12,7 @@ import GuestVisits from '@/components/GuestVisits'
 import AixHouse from '@/components/AixHouse'
 import WhoAreYou from '@/components/WhoAreYou'
 import InstallPrompt from '@/components/InstallPrompt'
+import OnboardingTour from '@/components/OnboardingTour'
 
 type Tab = 'calendar' | 'overview' | 'schedule' | 'trips' | 'phoebe' | 'guests' | 'aix'
 
@@ -55,6 +56,7 @@ export default function Home() {
   const [currentUser, setCurrentUser] = useState<string | null>(null)
   const [mounted, setMounted]       = useState(false)
   const [showMore, setShowMore]     = useState(false)
+  const [showOnboarding, setShowOnboarding] = useState(false)
 
   const [events, setEvents]                   = useState<Event[]>([])
   const [locations, setLocations]             = useState<Location[]>([])
@@ -82,6 +84,16 @@ export default function Home() {
   const handleSelectUser = (key: string) => {
     localStorage.setItem('demelo_identity', key)
     setCurrentUser(key)
+    // Show onboarding tour if first time on this device
+    if (!localStorage.getItem('demelo_onboarding_complete')) {
+      setShowOnboarding(true)
+    }
+  }
+
+  const handleOnboardingComplete = (goToSchedule: boolean) => {
+    localStorage.setItem('demelo_onboarding_complete', 'true')
+    setShowOnboarding(false)
+    if (goToSchedule) setTab('schedule')
   }
 
   const fetchAll = useCallback(async () => {
@@ -133,6 +145,9 @@ export default function Home() {
   return (
     <div className="min-h-screen bg-[#FAF8F3]">
       <InstallPrompt />
+      {showOnboarding && currentUser && (
+        <OnboardingTour currentUser={currentUser} onComplete={handleOnboardingComplete} />
+      )}
 
       {/* ── Header ── */}
       <header className="bg-white border-b border-stone-100 sticky top-0 z-20">
