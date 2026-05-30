@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { Event, Location, PhoebeSchedule, Guest, RoomAllocation, Stay, TripRsvp } from '@/lib/types'
-import Calendar from '@/components/Calendar'
 import LocationOverview from '@/components/LocationOverview'
 import MySchedule from '@/components/MySchedule'
 import FamilyTrips from '@/components/FamilyTrips'
@@ -14,14 +13,13 @@ import WhoAreYou from '@/components/WhoAreYou'
 import InstallPrompt from '@/components/InstallPrompt'
 import OnboardingTour from '@/components/OnboardingTour'
 
-type Tab = 'calendar' | 'overview' | 'schedule' | 'trips' | 'phoebe' | 'guests' | 'aix'
+type Tab = 'overview' | 'schedule' | 'trips' | 'phoebe' | 'guests' | 'aix'
 
 const WIDE_TABS: Tab[] = ['overview', 'aix']
 const VALID_USERS = ['jim', 'isabelle', 'elissa', 'ines', 'lea']
 
-// Bottom nav — 4 primary + More
+// Bottom nav — 3 primary + More
 const NAV_ITEMS: { id: Tab; label: string; icon: string }[] = [
-  { id: 'calendar', label: 'Calendar', icon: '📅' },
   { id: 'overview', label: 'Overview', icon: '🗺️' },
   { id: 'schedule', label: 'My Plan',  icon: '👤' },
   { id: 'aix',      label: 'Aix',      icon: '🏠' },
@@ -52,7 +50,7 @@ function DachshundIcon({ className }: { className?: string }) {
 }
 
 export default function Home() {
-  const [tab, setTab]               = useState<Tab>('calendar')
+  const [tab, setTab]               = useState<Tab>('overview')
   const [currentUser, setCurrentUser] = useState<string | null>(null)
   const [mounted, setMounted]       = useState(false)
   const [showMore, setShowMore]     = useState(false)
@@ -84,7 +82,6 @@ export default function Home() {
   const handleSelectUser = (key: string) => {
     localStorage.setItem('demelo_identity', key)
     setCurrentUser(key)
-    // Show onboarding tour if first time on this device
     if (!localStorage.getItem('demelo_onboarding_complete')) {
       setShowOnboarding(true)
     }
@@ -190,13 +187,13 @@ export default function Home() {
           </div>
         ) : (
           <>
-            {tab === 'calendar' && (
-              <Calendar events={events} phoebeSchedule={phoebeSchedule} guests={guests} stays={stays} onRefresh={fetchAll} />
-            )}
             {tab === 'overview' && (
               <LocationOverview
                 events={events} locations={locations} phoebeSchedule={phoebeSchedule}
-                stays={stays} guests={guests} tripRsvps={tripRsvps} onRefresh={fetchAll}
+                stays={stays} guests={guests} tripRsvps={tripRsvps}
+                currentUser={currentUser}
+                onRefresh={fetchAll}
+                onGoToSchedule={() => navigateTo('schedule')}
               />
             )}
             {tab === 'schedule' && (
@@ -218,11 +215,11 @@ export default function Home() {
         )}
       </main>
 
-      {/* ── More menu (above bottom nav) ── */}
+      {/* ── More menu ── */}
       {showMore && (
         <>
           <div className="fixed inset-0 z-20" onClick={() => setShowMore(false)} />
-          <div className="fixed bottom-[4.5rem] left-4 right-4 z-30 bg-white border border-stone-200 rounded-2xl shadow-xl overflow-hidden max-w-sm mx-auto">
+          <div className="fixed bottom-[5rem] left-4 right-4 z-30 bg-white border border-stone-200 rounded-2xl shadow-xl overflow-hidden max-w-sm mx-auto">
             {MORE_ITEMS.map((item, i) => (
               <button
                 key={item.id}
@@ -243,8 +240,10 @@ export default function Home() {
       )}
 
       {/* ── Bottom navigation bar ── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-stone-200 flex safe-bottom"
-           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+      <nav
+        className="fixed bottom-0 left-0 right-0 z-30 bg-white border-t border-stone-200 flex"
+        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+      >
         {NAV_ITEMS.map(item => {
           const isActive = tab === item.id
           return (
@@ -252,15 +251,15 @@ export default function Home() {
               key={item.id}
               onClick={() => navigateTo(item.id)}
               className={[
-                'flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors',
+                'flex-1 flex flex-col items-center justify-center py-3 gap-1 transition-colors relative',
                 isActive ? 'text-stone-800' : 'text-stone-400 active:text-stone-600',
               ].join(' ')}
             >
-              <span className="text-xl leading-none">{item.icon}</span>
-              <span className={`text-[10px] leading-tight ${isActive ? 'font-semibold' : 'font-normal'}`}>
+              <span className="text-2xl leading-none">{item.icon}</span>
+              <span className={`text-[11px] leading-tight ${isActive ? 'font-semibold' : 'font-normal'}`}>
                 {item.label}
               </span>
-              {isActive && <div className="absolute bottom-0 w-6 h-0.5 bg-stone-800 rounded-full" />}
+              {isActive && <div className="absolute bottom-0 w-8 h-0.5 bg-stone-800 rounded-full" />}
             </button>
           )
         })}
@@ -269,15 +268,15 @@ export default function Home() {
         <button
           onClick={() => setShowMore(m => !m)}
           className={[
-            'flex-1 flex flex-col items-center justify-center py-2 gap-0.5 transition-colors',
+            'flex-1 flex flex-col items-center justify-center py-3 gap-1 transition-colors relative',
             isMoreActive || showMore ? 'text-stone-800' : 'text-stone-400 active:text-stone-600',
           ].join(' ')}
         >
-          <span className="text-xl leading-none">•••</span>
-          <span className={`text-[10px] leading-tight ${isMoreActive || showMore ? 'font-semibold' : 'font-normal'}`}>
+          <span className="text-2xl leading-none">•••</span>
+          <span className={`text-[11px] leading-tight ${isMoreActive || showMore ? 'font-semibold' : 'font-normal'}`}>
             More
           </span>
-          {isMoreActive && <div className="absolute bottom-0 w-6 h-0.5 bg-stone-800 rounded-full" />}
+          {isMoreActive && <div className="absolute bottom-0 w-8 h-0.5 bg-stone-800 rounded-full" />}
         </button>
       </nav>
     </div>

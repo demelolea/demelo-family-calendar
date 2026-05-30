@@ -44,9 +44,9 @@ const STEPS: Step[] = [
   },
   {
     id: 4,
-    title: 'Calendar',
-    text: "A classic monthly calendar showing all family events, stays, guest visits, and Phoebe's schedule in one place. Tap any day to see the full details.",
-    tabPills: [{ icon: '📅', label: 'Calendar' }],
+    title: 'Calendar view',
+    text: "Switch to Calendar view inside Overview for a classic monthly layout — all stays, events, guests, and Phoebe's schedule in one place. Tap any day for the full details.",
+    tabPills: [{ icon: '🗺️', label: 'Overview' }],
   },
   {
     id: 5,
