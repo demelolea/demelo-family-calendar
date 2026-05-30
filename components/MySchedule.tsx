@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { Stay, Location, PERSON_COLORS, PERSON_LABELS } from '@/lib/types'
+import { Stay, Location, RoomAllocation, AIX_ROOMS, PERSON_COLORS, PERSON_LABELS } from '@/lib/types'
 import { supabase } from '@/lib/supabase'
 import { notifyFamily } from '@/lib/notify'
 import NotificationPrompt from './NotificationPrompt'
@@ -10,6 +10,7 @@ interface MyScheduleProps {
   currentUser: string
   stays: Stay[]
   locations: Location[]
+  roomAllocations: RoomAllocation[]
   onRefresh: () => void
 }
 
@@ -18,6 +19,12 @@ const TRANSPORT_TYPES = [
   { value: 'train',  label: '🚂 Train' },
   { value: 'car',    label: '🚗 Car' },
 ]
+
+const ROOM_LABEL = (id: string) => AIX_ROOMS.find(r => r.id === id)?.label ?? id
+
+function isAixLocation(loc: string) {
+  return loc.toLowerCase().includes('aix')
+}
 
 function formatDate(d: string) {
   return new Date(d + 'T12:00:00').toLocaleDateString('en-GB', {
@@ -28,8 +35,7 @@ function formatDate(d: string) {
 function transportSummary(type?: string, station?: string, time?: string) {
   if (!type) return null
   const icons: Record<string, string> = { flight: '✈', train: '🚂', car: '🚗' }
-  const icon = icons[type] ?? type
-  const parts = [icon]
+  const parts = [icons[type] ?? type]
   if (station) parts.push(station)
   if (time) parts.push(time)
   return parts.join(' · ')
@@ -97,13 +103,112 @@ function TransportFields({ label, type, setType, station, setStation, time, setT
   )
 }
 
-export default function MySchedule({ currentUser, stays, locations, onRefresh }: MyScheduleProps) {
-  const today = new Date().toISOString().slice(0, 10)
-  const color = PERSON_COLORS[currentUser] ?? '#8A8A8A'
-  const label = PERSON_LABELS[currentUser] ?? currentUser
+// ── Room drawer ────────────────────────────────────────────────────────────────
+
+type RoomDrawerData = {
+  displayName: string
+  startDate: string
+  endDate: string
+  currentRoomId: string | null
+  currentAllocationId: string | null
+}
+
+interface RoomDrawerProps {
+  data: RoomDrawerData
+  currentUser: string
+  saving: boolean
+  onAssign: (roomId: string) => void
+  onRemove: () => void
+  onSkip: () => void
+  isPrompt?: boolean   // true = just saved a new stay, false = editing existing
+}
+
+function RoomDrawer({ data, saving, onAssign, onRemove, onSkip, isPrompt }: RoomDrawerProps) {
+  return (
+    <>
+      <div
+        className="fixed inset-0 bg-black/40 z-40 backdrop-blur-sm"
+        onClick={onSkip}
+      />
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white rounded-t-3xl shadow-2xl px-5 pt-4 pb-10">
+        {/* Drag handle */}
+        <div className="w-10 h-1 bg-stone-300 rounded-full mx-auto mb-4" />
+
+        {/* Header */}
+        <div className="mb-4">
+          {isPrompt ? (
+            <>
+              <p className="font-semibold text-stone-800">Assign a room in Aix? 🏠</p>
+              <p className="text-xs text-stone-400 mt-0.5">
+                {data.displayName} · {formatDate(data.startDate)} – {formatDate(data.endDate)}
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-semibold text-stone-800">{data.displayName}'s room</p>
+              <p className="text-xs text-stone-400 mt-0.5">
+                {data.currentRoomId
+                  ? `Currently in ${ROOM_LABEL(data.currentRoomId)} · tap to move`
+                  : 'Tap a room to assign'}
+              </p>
+            </>
+          )}
+        </div>
+
+        {/* Room grid */}
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          {AIX_ROOMS.map(room => {
+            const isCurrent = data.currentRoomId === room.id
+            return (
+              <button
+                key={room.id}
+                onClick={() => onAssign(room.id)}
+                disabled={saving}
+                className={[
+                  'py-3 px-4 rounded-xl text-sm font-medium border-2 transition-all text-left',
+                  isCurrent
+                    ? 'bg-stone-800 text-white border-stone-800'
+                    : 'bg-white text-stone-700 border-stone-200 hover:border-stone-400 active:bg-stone-50',
+                ].join(' ')}
+              >
+                {room.label}
+                {isCurrent && <span className="block text-[10px] opacity-60 mt-0.5">Assigned ✓</span>}
+              </button>
+            )
+          })}
+        </div>
+
+        {/* Remove / skip */}
+        {data.currentRoomId ? (
+          <button
+            onClick={onRemove}
+            disabled={saving}
+            className="w-full py-2.5 border border-red-200 text-red-600 rounded-xl text-sm font-medium hover:bg-red-50 transition-colors disabled:opacity-50"
+          >
+            {saving ? 'Saving…' : 'Remove from room'}
+          </button>
+        ) : (
+          <button
+            onClick={onSkip}
+            className="w-full py-2 text-sm text-stone-400 hover:text-stone-600 transition-colors text-center"
+          >
+            Skip for now
+          </button>
+        )}
+      </div>
+    </>
+  )
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
+export default function MySchedule({ currentUser, stays, locations, roomAllocations, onRefresh }: MyScheduleProps) {
+  const today     = new Date().toISOString().slice(0, 10)
+  const color     = PERSON_COLORS[currentUser] ?? '#8A8A8A'
+  const label     = PERSON_LABELS[currentUser] ?? currentUser
   const baseLocation = locations.find(l => l.person === currentUser)?.current_location ?? null
 
-  const myStays = stays
+  const myStays   = stays
     .filter(s => s.person === currentUser)
     .sort((a, b) => a.start_date.localeCompare(b.start_date))
 
@@ -111,11 +216,11 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
   const upcoming = myStays.filter(s => s.start_date > today)
   const past     = myStays.filter(s => s.end_date < today).reverse()
 
-  // Form state
+  // ── Form state ──────────────────────────────────────────────────────────────
   const formRef = useRef<HTMLDivElement>(null)
-  const [showForm,     setShowForm]     = useState(false)
-  const [editingStay,  setEditingStay]  = useState<Stay | null>(null)
-  const [confirmingDelete, setConfirmingDelete] = useState<string | null>(null)
+  const [showForm,          setShowForm]          = useState(false)
+  const [editingStay,       setEditingStay]       = useState<Stay | null>(null)
+  const [confirmingDelete,  setConfirmingDelete]  = useState<string | null>(null)
 
   const [location,   setLocation]   = useState('')
   const [startDate,  setStartDate]  = useState('')
@@ -130,6 +235,33 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
   const [loading,    setLoading]    = useState(false)
   const [deleting,   setDeleting]   = useState<string | null>(null)
 
+  // ── Room drawer state ───────────────────────────────────────────────────────
+  const [roomDrawer, setRoomDrawer] = useState<RoomDrawerData | null>(null)
+  const [roomSaving, setRoomSaving] = useState(false)
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** Find the room allocation for the current user overlapping a given stay. */
+  const getAssignedRoom = (stay: Stay): { roomId: string; allocationId: string } | null => {
+    const alloc = roomAllocations.find(a =>
+      a.occupant_name.toLowerCase() === label.toLowerCase() &&
+      a.start_date <= stay.end_date && a.end_date >= stay.start_date,
+    )
+    return alloc ? { roomId: alloc.room, allocationId: alloc.id } : null
+  }
+
+  const openRoomDrawerForStay = (stay: Stay) => {
+    const assigned = getAssignedRoom(stay)
+    setRoomDrawer({
+      displayName:          label,
+      startDate:            stay.start_date,
+      endDate:              stay.end_date,
+      currentRoomId:        assigned?.roomId ?? null,
+      currentAllocationId:  assigned?.allocationId ?? null,
+    })
+  }
+
+  // ── Form helpers ────────────────────────────────────────────────────────────
   const resetForm = () => {
     setLocation(''); setStartDate(''); setEndDate('')
     setStatus('confirmed')
@@ -166,6 +298,7 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     resetForm()
   }
 
+  // ── Save stay ───────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!location.trim() || !startDate || !endDate) return
@@ -184,6 +317,9 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
       dep_time:           (depType && depType !== 'car') ? (depTime || null) : null,
     }
 
+    const isAix    = isAixLocation(location.trim())
+    const isNewAix = isAix && !editingStay
+
     if (editingStay) {
       await supabase.from('stays').update(payload).eq('id', editingStay.id)
       notifyFamily(currentUser, 'De Melo Update',
@@ -197,8 +333,20 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     setLoading(false)
     cancelForm()
     onRefresh()
+
+    // After a new Aix stay, prompt for room assignment
+    if (isNewAix) {
+      setRoomDrawer({
+        displayName:          label,
+        startDate,
+        endDate,
+        currentRoomId:        null,
+        currentAllocationId:  null,
+      })
+    }
   }
 
+  // ── Delete stay ─────────────────────────────────────────────────────────────
   const handleDelete = async (id: string) => {
     setDeleting(id)
     await supabase.from('stays').delete().eq('id', id)
@@ -207,12 +355,59 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     onRefresh()
   }
 
+  // ── Room assignment ──────────────────────────────────────────────────────────
+  const handleAssignRoom = async (roomId: string) => {
+    if (!roomDrawer || roomSaving) return
+    setRoomSaving(true)
+
+    // Remove existing allocation if any
+    if (roomDrawer.currentAllocationId) {
+      await supabase.from('room_allocations').delete().eq('id', roomDrawer.currentAllocationId)
+    }
+
+    // Insert new allocation
+    await supabase.from('room_allocations').insert({
+      room:          roomId,
+      occupant_name: roomDrawer.displayName,
+      start_date:    roomDrawer.startDate,
+      end_date:      roomDrawer.endDate,
+    })
+
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    notifyFamily(currentUser, 'Room assigned 🏠',
+      `${actor} assigned themselves to ${ROOM_LABEL(roomId)} in Aix`)
+
+    setRoomSaving(false)
+    setRoomDrawer(null)
+    onRefresh()
+  }
+
+  const handleRemoveRoom = async () => {
+    if (!roomDrawer || roomSaving) return
+    setRoomSaving(true)
+
+    if (roomDrawer.currentAllocationId) {
+      await supabase.from('room_allocations').delete().eq('id', roomDrawer.currentAllocationId)
+    }
+
+    const actor = PERSON_LABELS[currentUser] ?? currentUser
+    notifyFamily(currentUser, 'Room cleared 🏠',
+      `${actor} removed their room assignment in Aix`)
+
+    setRoomSaving(false)
+    setRoomDrawer(null)
+    onRefresh()
+  }
+
+  // ── Stay card ────────────────────────────────────────────────────────────────
   const StayCard = ({ stay, dim }: { stay: Stay; dim?: boolean }) => {
-    const isActive    = stay.start_date <= today && stay.end_date >= today
-    const arrSummary  = transportSummary(stay.arr_transport_type, stay.arr_station, stay.arr_time)
-    const depSummary  = transportSummary(stay.dep_transport_type, stay.dep_station, stay.dep_time)
-    const isEditing   = editingStay?.id === stay.id
+    const isActive     = stay.start_date <= today && stay.end_date >= today
+    const arrSummary   = transportSummary(stay.arr_transport_type, stay.arr_station, stay.arr_time)
+    const depSummary   = transportSummary(stay.dep_transport_type, stay.dep_station, stay.dep_time)
+    const isEditing    = editingStay?.id === stay.id
     const isConfirming = confirmingDelete === stay.id
+    const isAix        = isAixLocation(stay.location)
+    const assigned     = isAix ? getAssignedRoom(stay) : null
 
     return (
       <div
@@ -241,10 +436,26 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
                   <span className="text-stone-500 font-medium">Leaving: </span>{depSummary}
                 </p>
               )}
+
+              {/* Room badge — only for Aix stays */}
+              {isAix && (
+                <button
+                  onClick={() => openRoomDrawerForStay(stay)}
+                  className={[
+                    'mt-2 inline-flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-full transition-colors',
+                    assigned
+                      ? 'bg-stone-100 text-stone-600 hover:bg-stone-200'
+                      : 'bg-amber-100 text-amber-700 hover:bg-amber-200',
+                  ].join(' ')}
+                >
+                  🏠 {assigned ? ROOM_LABEL(assigned.roomId) : 'No room assigned'}
+                  <span className="opacity-50">›</span>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Badges + action buttons */}
+          {/* Badges + actions */}
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {stay.status === 'tentative' && (
               <span className="text-[10px] font-semibold bg-stone-100 text-stone-500 px-2 py-0.5 rounded-full">
@@ -257,7 +468,6 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
               </span>
             )}
 
-            {/* Edit button */}
             {!isConfirming && (
               <button
                 onClick={() => isEditing ? cancelForm() : openEdit(stay)}
@@ -271,7 +481,6 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
               </button>
             )}
 
-            {/* Delete — two-step confirmation */}
             {!isEditing && (
               isConfirming ? (
                 <div className="flex items-center gap-1">
@@ -306,9 +515,11 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
     )
   }
 
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       <NotificationPrompt currentUser={currentUser} />
+
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
@@ -396,6 +607,13 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
               </div>
             </div>
 
+            {/* Aix room hint */}
+            {isAixLocation(location) && !editingStay && (
+              <p className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                🏠 You'll be able to choose your room after saving.
+              </p>
+            )}
+
             {/* Transport sections */}
             <div className="border-t border-stone-200 pt-3 space-y-4">
               <TransportFields
@@ -460,6 +678,22 @@ export default function MySchedule({ currentUser, stays, locations, onRefresh }:
         <div className="text-center py-16 text-stone-400 text-sm italic">
           No stays added yet. Press "Add stay" to get started.
         </div>
+      )}
+
+      {/* Room assignment drawer */}
+      {roomDrawer && (
+        <RoomDrawer
+          data={roomDrawer}
+          currentUser={currentUser}
+          saving={roomSaving}
+          onAssign={handleAssignRoom}
+          onRemove={handleRemoveRoom}
+          onSkip={() => setRoomDrawer(null)}
+          isPrompt={!roomDrawer.currentRoomId && !roomAllocations.some(a =>
+            a.occupant_name.toLowerCase() === label.toLowerCase() &&
+            a.start_date <= roomDrawer.endDate && a.end_date >= roomDrawer.startDate,
+          )}
+        />
       )}
     </div>
   )

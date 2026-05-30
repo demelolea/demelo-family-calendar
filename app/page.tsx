@@ -200,7 +200,7 @@ export default function Home() {
               />
             )}
             {tab === 'schedule' && (
-              <MySchedule currentUser={currentUser} stays={stays} locations={locations} onRefresh={fetchAll} />
+              <MySchedule currentUser={currentUser} stays={stays} locations={locations} roomAllocations={roomAllocations} onRefresh={fetchAll} />
             )}
             {tab === 'trips' && (
               <FamilyTrips events={events} tripRsvps={tripRsvps} currentUser={currentUser} onRefresh={fetchAll} />
